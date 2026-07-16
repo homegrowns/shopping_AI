@@ -1,0 +1,23 @@
+<html>
+
+<head>
+    <title>{{ title }}</title>
+    <link href="https://unpkg.com/mvp.css" rel="stylesheet" />
+</head>
+
+<body>
+    <header>
+        <h1>AI 쇼퍼</h1>
+    </header>
+    <center>
+        <form action="/query" method="get">
+            <input type="search" placeholder="질문을 입력하세요" name="s" />
+            <button type="submit">검색</button>
+        </form>
+    </center>
+    <main>
+        {{ answer }}
+    </main>
+</body>
+
+</html>
