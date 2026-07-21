@@ -6,7 +6,7 @@ load_dotenv()
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
-
+from app.rag.sql_tool  import execute_sql_query, get_table_schema
 from app.rag.retriever import retriever, retriever_tool
 from app.rag.state import AgentState
 
@@ -26,6 +26,23 @@ elif os.getenv("ENV") == "dev":
     llm = ChatOllama(model="llama3.1")
     print("(nodes.py)LLM: ", "dev")
 
+llm_with_tools = llm.bind_tools([retriever_tool, execute_sql_query, get_table_schema])
+
+
+system_prompt = """당신은 쇼핑몰 AI 어시스턴트입니다.
+[문서 검색]
+- 맞춤법, 규정 관련 질문 → pdf_search 도구 사용
+[상품 DB 검색]
+- 상품 조회, 가격, 개수 질문 → 아래 규칙 따르기
+  1. 먼저 get_table_schema로 스키마 확인
+  2. execute_sql_query로 SELECT만 실행
+  3. DROP/DELETE/UPDATE/INSERT 절대 금지
+  4. 색상 같은 컬럼 없으면 title, description에 LIKE 검색
+[일반 질문]
+- 도구 없이 직접 답변
+[중요 사항]
+- 상품 관련 질문은 절대 pdf_search를 사용하지 마세요!
+"""
 
 def chatbot(state: AgentState):
     """
@@ -33,13 +50,17 @@ def chatbot(state: AgentState):
     질문이 주어지면 검색 도구를 도구호출 하거나 일반 답변하며 종료할지 결정할 수 있습니다.
     """
     print("----- [CHATBOT] -----")
-    messages = state["messages"]
-    llm_with_tools = llm.bind_tools([retriever_tool]) # [ 1 ]
-    response = llm_with_tools.invoke(messages) # [ 2 ]
+    # system_prompt를 MessagesState에 추가하기 위해 AI Message로 변환
+    system_message = AIMessage(content=system_prompt)
+    
+    # state에 system 메시지를 먼저 추가하고 나머지 메시지들을 뒤에 이어 붙입니다.
+    messages = [system_message] + state["messages"]
+    
+    response = llm_with_tools.invoke(messages)
 
-    return { # [ 3 ]
+    return {
         "messages": [response],
-        "question" : messages[-1].content
+        "question": messages[-1].content
     }
 
 def retrieve(state: AgentState):
@@ -68,6 +89,53 @@ def retrieve(state: AgentState):
     else:
         return {"messages": [AIMessage(content=context)], "context": context}
 
+def route_tools(state: AgentState):
+    last_message = state["messages"][-1]
+    
+    # 도구 호출 없으면 종료
+    if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
+        return END
+    
+    # 어떤 도구인지 확인
+    tool_name = last_message.tool_calls[0]["name"]
+    
+    if tool_name == "pdf_search":
+        print("----- [ROUTE TOOLS PDF SEARCH] -----")
+        return "tools"        # → retriever
+    elif tool_name in ["execute_sql_query", "get_table_schema"]:
+        print("----- [ROUTE TOOLS SQL QUERY] -----")
+        return "sql_tool"     # → sqllite
+    else:
+        print("----- [END] -----")
+        return END
+
+def sql_query_generate(state: AgentState):
+    """
+    현재 질문을 기반으로 관련 sqllite를 검색합니다.
+    """
+    print("----- [SQL QUERY GENERATE] -----")
+    # Tool 호출에 대한 응답 메시지(검색 결과) 생성
+    last_message = state["messages"][-1]
+
+    if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
+        return {"messages": [AIMessage(content="SQL 호출 정보 없음")]}
+    
+    tool_call = last_message.tool_calls[0]
+    tool_name = tool_call["name"]
+    tool_args = tool_call["args"]
+
+    # 도구 실행
+    if tool_name == "execute_sql_query":
+        context = execute_sql_query.invoke(tool_args)
+    elif tool_name == "get_table_schema":
+        context = get_table_schema.invoke(tool_args)
+    
+    tool_message = ToolMessage(
+        content=str(context),
+        name=tool_name,
+        tool_call_id=tool_call["id"]
+    )
+    return {"messages": [tool_message], "context": str(context)}
 
 def context_organizer(state: AgentState):
     """
@@ -79,10 +147,11 @@ def context_organizer(state: AgentState):
     context_organizer_prompt = ChatPromptTemplate.from_messages(
         [
             (   "system",
-                """당신은 검색증강생성(RAG)을 위한 검색문서를 정리하는 전문가입니다.
-                아래의 검색된 결과 문서를 확인하고, LLM이 해당 문서를 정리된 형태로 참고할 수 있도록
+                """당신은 검색증강생성(RAG)을 위한 검색문서 및 쿼리 결과를 정리하는 전문가입니다.
+                아래의 검색된 결과를 확인하고, LLM이 해당 문서를 정리된 형태로 참고할 수 있도록
                 문서의 불필요한 공백 등을 삭제하거나 정렬을 다시하여 정리된 형태로 반환해주세요.
-                내용을 삭제하는 것을 최소로 합니다. 페이지 번호 정보를 절대 삭제하지 마세요."""
+                내용을 삭제하는 것을 최소로 합니다. 페이지 번호 정보를 절대 삭제하지 마세요.
+                SQL QUERY GENERATE사용시 쿼리를 보여주지말고 결과만 보여주세요"""
             ),
             (
                 "user",
@@ -115,7 +184,7 @@ def transform_query(state: AgentState):
     question = state["question"]
 
     system = """
-    당신은 질문을 다시 작성하는 전문가입니다. 입력된 질문을 벡터 저장소 검색에 최적화된 더 나은 버전으로 변환하세요.
+    당신은 질문을 다시 작성하는 전문가입니다. 입력된 질문을 검색에 최적화된 더 나은 버전으로 변환하세요.
     입력을 살펴보고 질문의 핵심적인 의미와 의도를 파악하여 개선된 질문을 만들어주세요."""
     re_write_prompt = ChatPromptTemplate.from_messages(
         [

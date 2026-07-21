@@ -101,7 +101,8 @@ def check_hallucinations(state):
     structured_llm = llm.with_structured_output(GradeHallucinations)
 
     system = """당신은 LLM이 생성한 답변이 검색된 사실들에 근거하고 있는지 평가하는 평가자입니다.
-    'yes' 또는 'no'의 이진 점수를 제공하세요. 'yes'는 답변이 사실들에 근거하고 있음을 의미합니다."""
+    'yes' 또는 'no'의 이진 점수를 제공하세요. 'yes'는 답변이 사실들에 근거하고 있음을 의미합니다.
+    상품 관련 질문은 절대 pdf_search를 사용하지 마세요!"""
     hallucination_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system),
@@ -117,6 +118,7 @@ def check_hallucinations(state):
     grade = score.binary_score
     if grade == "yes":
         print("---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---")
+        print(score.binary_score)
         return "support"
     else:
         print("---DECISION: GENERATION IS NOT GROUNDED IN DOCUMENTS, RE-TRY---")

@@ -26,7 +26,7 @@ retriever = vectorstore.as_retriever(search_kwargs={"k": 5}) # [ 2 ]
 retriever_tool = create_retriever_tool( # [ 3 ]
     retriever,
     name="pdf_search",
-    description="use this tool to search information from the Korean Spelling Rules PDF document",
+    description="use this tool to search information from the Korean Spelling Rules PDF document, do not use this tool for product search",
 )
 
 if __name__ == "__main__":
