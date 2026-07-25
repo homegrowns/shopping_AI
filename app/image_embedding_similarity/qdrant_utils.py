@@ -38,10 +38,16 @@ def upsert_points(client: QdrantClient, points: list[PointStruct]) -> None:
         client.upsert(collection_name=COLLECTION_NAME, points=points)
 
 
-def search_similar(client: QdrantClient, vector: list[float], top_k: int = 5):
+def search_similar(
+    client: QdrantClient,
+    vector: list[float],
+    top_k: int = 5,
+    score_threshold: float | None = None,
+):
     response = client.query_points(
         collection_name=COLLECTION_NAME,
         query=vector,
         limit=top_k,
+        score_threshold=score_threshold,
     )
     return response.points

@@ -207,23 +207,31 @@
             cursor: default;
         }
 
-        /* ─── 검색 결과 그리드 ─── 
-           - auto-fill + minmax로 화면 크기에 따라 카드 수 자동 조절
-           - 최소 150px, 남은 공간을 균등 분배
+        /* ─── 검색 결과: 가로 스크롤 카드 ─── 
+           - 자연어 답변 아래, 점수 기준을 넘은 상품들을 가로로 스크롤하며 보여줌
         */
         #results {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            display: flex;
             gap: 12px;
+            overflow-x: auto;
+            padding-bottom: 4px;
+            margin-top: 10px;
         }
 
-        /* ─── 상품 카드 ─── 테두리 + 흰 배경, 가운데 정렬 */
+        /* ─── 자연어 답변 텍스트 ─── */
+        .answer-text {
+            margin-bottom: 4px;
+            line-height: 1.5;
+        }
+
+        /* ─── 상품 카드 ─── 테두리 + 흰 배경, 가운데 정렬, 가로 스크롤이라 너비 고정 */
         .card {
             border: 1px solid #e2e2e2;
             background: #fff;
             border-radius: 8px;
             padding: 8px;
             text-align: center;
+            flex: 0 0 140px;
         }
 
         /* ─── 카드 내 상품 이미지 ─── 130px 높이, 비율 유지 크롭 */
@@ -241,7 +249,7 @@
             margin-top: 6px;
         }
 
-        /* ─── 카드 상품명 ─── 
+        /* ─── 카드 상품명(링크) ─── 
            - 고정 높이 32px + overflow:hidden으로 긴 제목 잘림 처리
         */
         .card .title {
@@ -250,6 +258,13 @@
             margin-top: 4px;
             height: 32px;
             overflow: hidden;
+        }
+        .card .title a {
+            color: inherit;
+            text-decoration: none;
+        }
+        .card .title a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
@@ -437,13 +452,15 @@
             const cardsHtml = (results || []).map(r => `
       <div class="card">
         <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
-        <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
-        <div class="score">score: ${r.score}</div>
+        <div class="title">
+          <a href="${r.image_url}" target="_blank" rel="noopener">${escapeHtml(r.title || r.product_id || '')}</a>
+        </div>
+        <div class="score">id: ${escapeHtml(String(r.product_id))} · score: ${r.score}</div>
       </div>
     `).join('');
             el.innerHTML = `
       <div class="bubble">
-        <div class="status-line">${escapeHtml(statusText)}</div>
+        <div class="status-line answer-text">${escapeHtml(statusText)}</div>
         <div id="results">${cardsHtml}</div>
       </div>
     `;
@@ -452,86 +469,20 @@
         }
 
 
-        // async function getSessionId() {
-        //     let id = sessionStorage.getItem('search_session_id');
-        //     if (!id) {
-        //         const res = await fetch('/session', { method: 'POST' });
-        //         const data = await res.json();
-        //         id = data.session_id;  // ← 백엔드가 발급한 ID
-        //         sessionStorage.setItem('search_session_id', id);
-        //     }
-        //     return id;
-        // }
-
         /* ===========================================================
-           [10] 핵심 로직: 검색 요청 전송 (handleSend)
-           ─────────────────────────────────────────────────────────────
-           1) 입력 검증: 텍스트도 이미지도 없으면 아무것도 하지 않음
-           2) 사용자 메시지를 채팅 로그에 먼저 표시 (낙관적 UI)
-           3) 입력창 즉시 초기화 → 응답 대기 중에도 다음 질문 준비 가능
-           4) "업로드 준비 중..." 로딩 말풍선을 미리 표시
-           5) Step 1: 파일 첨부 시 uploadImageToS3() 호출 (S3 직접 업로드 및 s3_key 획득)
-           6) Step 2: searchSimilarProducts() 호출 (s3_key와 메시지를 포함해 검색 API 요청)
-           7) Step 3 (성공): 로딩 말풍선의 상태 텍스트와 결과 카드를 업데이트
-              - crop_applied가 true면 크롭 적용 안내 추가
-           8) Step 3 (실패): catch 블록에서 각 함수가 던진 구체적인 에러 메시지를 표시
+        검색 요청 전송 (파일이 있으면 /search에 직접 첨부해서 보낸다.
+        별도 S3 presign 업로드 단계는 백엔드에 해당 엔드포인트가 없어
+        제거했다 - 필요해지면 별도로 다시 구현)
         =========================================================== */
-        async function uploadImageToS3(fileToUpload, loadingBubble) {
-            loadingBubble.querySelector('.status-line').textContent = '📤 Presigned URL 발급 중...';
-
-            const presignRes = await fetch(API_BASE + '/products', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    content_type: fileToUpload.type,
-                    session_id: currentSessionId  // 전역 변수 참조
-                })
-            });
-
-            if (!presignRes.ok) {
-                throw new Error('Presigned URL 발급에 실패했습니다.');
-            }
-
-            const presignData = await presignRes.json();
-
-            // 첫 업로드여서 세션 ID를 새로 발급받았다면 갱신 (전역 변수 업데이트)
-            if (!currentSessionId && presignData.session_id) {
-                currentSessionId = presignData.session_id;
-                console.log('새로운 세션이 시작되었습니다:', currentSessionId);
-            }
-
-            loadingBubble.querySelector('.status-line').textContent = '📤 S3에 이미지 업로드 중...';
-
-            const uploadRes = await fetch(presignData.presigned_url, {
-                method: 'PUT',
-                headers: { 'Content-Type': fileToUpload.type },
-                body: fileToUpload
-            });
-
-            if (!uploadRes.ok) {
-                throw new Error('S3 이미지 업로드에 실패했습니다.');
-            }
-
-            loadingBubble.querySelector('.status-line').textContent = '✅ 이미지 업로드 완료! 검색 중...';
-            console.log('S3 업로드 완료 → s3_key:', presignData.s3_key);
-
-            return presignData.s3_key;
-        }
-
-        /* ===========================================================
-        2. 유사 상품 검색 전용 함수
-        성공 시 검색 결과(데이터) 반환, 실패 시 에러 throw
-        =========================================================== */
-        async function searchSimilarProducts(message, fileToUpload, s3Key, loadingBubble) {
+        async function searchSimilarProducts(message, fileToUpload, loadingBubble) {
             loadingBubble.querySelector('.status-line').textContent = '🔍 유사 상품 검색 중...';
 
             const formData = new FormData();
             formData.append('session_id', currentSessionId);
             if (message) formData.append('message', message);
             if (fileToUpload) formData.append('file', fileToUpload);
-            if (s3Key) formData.append('s3_key', s3Key);
 
-            const res = await fetch('/search?top_k=8', { method: 'POST', body: formData });
+            const res = await fetch('/search?top_k=20', { method: 'POST', body: formData });
 
             if (!res.ok) {
                 throw new Error(`검색 서버 응답 오류 (상태 코드: ${res.status})`);
@@ -548,7 +499,7 @@
         }
 
         /* ===========================================================
-        3. 메인 핸들러 (이벤트 연결 함수)
+        메인 핸들러 (이벤트 연결 함수)
         =========================================================== */
         async function handleSend() {
             const message = messageInput.value.trim();
@@ -571,35 +522,34 @@
 
             /* ── 로딩 상태: 버튼 비활성화 + "검색 중..." 말풍선 표시 ── */
             sendBtn.disabled = true;
-            appendAssistantMessage('📤 업로드 준비 중...', []);
+            appendAssistantMessage('🔍 검색 중...', []);
             const loadingBubble = chatLog.lastElementChild;
 
             try {
-                let s3Key = null;
+                const data = await searchSimilarProducts(message, fileToUpload, loadingBubble);
 
-                // [Step 1] 이미지가 있다면 S3 업로드
-                if (fileToUpload) {
-                    s3Key = await uploadImageToS3(fileToUpload, loadingBubble);
-                }
+                /* ── 결과 렌더링: 자연어 답변(있으면) 우선 표시, 없으면 상태 문구 ── */
+                let statusText = data.answer
+                    ? data.answer
+                    : (data.results.length
+                        ? `${data.results.length}개 유사 상품을 찾았습니다.`
+                        : '기준 점수 이상으로 유사한 상품을 찾지 못했습니다.');
 
-                // [Step 2] 검색 요청
-                const data = await searchSimilarProducts(message, fileToUpload, s3Key, loadingBubble);
-
-                // [Step 3] 결과 렌더링
-                let statusText = `${data.results.length}개 유사 상품을 찾았습니다.`;
-                if (data.crop_applied) statusText += ' (주요 영역 감지 → 크롭해서 검색함)';
+                if (data.crop_applied) statusText += '\n(주요 영역 감지 → 크롭해서 검색함)';
 
                 loadingBubble.querySelector('.status-line').textContent = statusText;
                 loadingBubble.querySelector('#results').innerHTML = data.results.map(r => `
                     <div class="card">
                         <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
-                        <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
-                        <div class="score">score: ${r.score}</div>
+                        <div class="title">
+                            <a href="${r.image_url}" target="_blank" rel="noopener">${escapeHtml(r.title || r.product_id || '')}</a>
+                        </div>
+                        <div class="score">id: ${escapeHtml(String(r.product_id))} · score: ${r.score}</div>
                     </div>
                 `).join('');
 
             } catch (err) {
-                /* 에러 발생: S3 업로드, 검색 API 중 어디서 에러를 던졌든 여기서 통합 처리됨 */
+                /* 에러 발생: 검색 API에서 던진 에러를 여기서 통합 처리 */
                 loadingBubble.querySelector('.status-line').textContent = '요청 실패: ' + err.message;
                 console.error("작업 중 오류 발생:", err);
             } finally {

@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
@@ -250,3 +251,242 @@ def generate(state: AgentState):
     rag_chain = rag_prompt | llm
     response = rag_chain.invoke({"question": question, "context": context})
     return {"question": question, "answer": response.content, "messages": [response]}
+
+
+def generate_shopping_answer(
+    question: str,
+    candidates: list[dict],
+    image_labels: list[str] | None = None,
+) -> str:
+    """
+    이미지/텍스트 유사도 검색(CLIP + Qdrant)으로 찾은 후보 상품 목록을 받아,
+    사용자의 질문 의도에 맞는 카테고리의 상품만 추려서 자연어 추천 답변을 생성한다.
+
+    후보 목록은 이미 스코어(유사도) 기준으로만 필터링된 상태라, 카테고리가
+    맞지 않는 상품(예: 신발을 찾는데 액세서리가 섞이는 경우)이 섞여 있을 수 있다.
+    상품 데이터에 별도 카테고리 컬럼이 없기 때문에, 카테고리 판단 자체는
+    코드가 아니라 이 프롬프트를 통해 LLM이 수행한다.
+
+    image_labels가 주어지면(Vision Label Detection 결과, 보통 영어) 참고
+    컨텍스트로 프롬프트에 함께 넣는다. 사용자 텍스트와 문자열이 정확히
+    겹치는지는 확인하지 않고, LLM이 의미/맥락으로 판단하도록 맡긴다.
+    (예: 사용자가 "이런 비슷한 상품 추천해줘"처럼 막연하게 질문해도,
+    라벨이 "video projector, gadget"이면 그 의미를 참고해 카테고리를 유추)
+
+    Args:
+        question: 사용자가 입력한 텍스트 질문
+        candidates: [{"product_id":..., "title":..., "score":...}, ...] 형태의 후보 목록
+        image_labels: 첨부 이미지에서 감지된 라벨 목록 (없으면 None)
+
+    Returns:
+        LLM이 생성한 자연어 추천 답변 (str)
+    """
+    print("----- [GENERATE SHOPPING ANSWER] -----")
+
+    if not candidates:
+        return "조건에 맞는 유사 상품을 찾지 못했어요."
+
+    candidates_text = "\n".join(
+        f"- (id: {c.get('product_id')}) {c.get('title') or '제목 없음'}"
+        for c in candidates
+    )
+
+    if image_labels:
+        image_context = (
+            f"\n\n첨부된 이미지에서 감지된 대략적인 내용(참고용, 영어일 수 있음): "
+            f"{', '.join(image_labels)}"
+        )
+    else:
+        image_context = ""
+
+    shopping_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """당신은 쇼핑몰 AI 어시스턴트입니다.
+                아래 "후보 상품 목록"은 사용자가 업로드한 이미지 또는 입력한 텍스트와
+                시각적/의미적으로 유사도가 높다고 판단되어 검색된 상품들입니다.
+                다만 이 목록은 유사도 점수만으로 걸러진 것이라, 사용자의 질문 의도와
+                맞지 않는 카테고리의 상품이 섞여 있을 수 있습니다
+                (예: 신발을 찾는 질문인데 액세서리나 가방이 섞여 있는 경우).
+
+                이미지가 첨부된 경우, 이미지에서 감지된 내용(라벨)이 함께
+                주어질 수 있습니다. 사용자의 질문이 "이런 거 추천해줘"처럼
+                막연하더라도, 이 라벨의 "의미"를 참고해서(문자열이 정확히
+                일치하지 않아도 됩니다. 예: 라벨 "video projector"는
+                "로봇청소기"나 "빔프로젝터"와 의미적으로 연결될 수 있습니다)
+                실제로 같은 카테고리인지 스스로 판단하세요.
+
+                [중요 규칙]
+                1. 사용자의 질문 의도(및 이미지 라벨의 의미)에 맞는 카테고리의
+                   상품만 골라서 언급하세요.
+                2. 후보 목록에 없는 상품을 절대 지어내지 마세요.
+                3. 의도에 맞는 상품이 하나도 없다면, 그렇다고 솔직하게 답변하세요.
+                4. 답변은 친절하고 간결한 한국어 문장으로 작성하세요
+                   (번호로 나열하기보다는 자연스러운 추천 대화체로).
+                """,
+            ),
+            (
+                "user",
+                "사용자 질문: {question}{image_context}\n\n후보 상품 목록:\n{candidates_text}\n\n답변:",
+            ),
+        ]
+    )
+
+    chain = shopping_prompt | llm
+    response = chain.invoke(
+        {
+            "question": question,
+            "image_context": image_context,
+            "candidates_text": candidates_text,
+        }
+    )
+    return response.content
+
+
+class QueryDescriptiveness(BaseModel):
+    """사용자 텍스트가 검색 쿼리로 쓸 만큼 구체적인 묘사인지 판단"""
+
+    is_descriptive: bool = Field(
+        description="사용자 텍스트가 색상/종류/브랜드/용도 등 검색에 실제로 "
+        "도움이 되는 구체적 단서를 포함하면 True. "
+        "'이런 거 찾아줘', '비슷한 상품 추천해줘'처럼 첨부 이미지를 "
+        "가리키기만 하는 막연한 요청이면 False."
+    )
+    reason: str = Field(description="판단 이유를 한 문장으로")
+
+
+def is_descriptive_query(text: str) -> bool:
+    """
+    이미지+텍스트를 함께 입력했을 때, 이 텍스트를 검색 쿼리 벡터에
+    포함시킬지 판단하기 위한 함수.
+
+    "이런 거 찾아줘"처럼 막연한 텍스트를 CLIP으로 임베딩하면 실질적인
+    의미 정보가 거의 없는 벡터가 나오는데, 이걸 image_vector와 동일
+    비중으로 평균 내면 오히려 image_vector가 갖고 있던 정확한 위치
+    정보를 흐려서 검색 정밀도가 떨어질 수 있다.
+
+    그래서 텍스트가 "구체적 묘사"인지 LLM으로 판단해서:
+    - True(구체적)면: 검색 쿼리에 텍스트도 포함 (기존 50:50 방식)
+    - False(막연함)면: 검색 쿼리에서는 텍스트를 빼고 이미지만 사용
+      (단, 텍스트 자체는 여전히 generate_shopping_answer()의 질문으로는
+      그대로 전달되어 답변 생성에는 영향을 준다)
+
+    판단 자체가 실패하면(LLM 에러 등) 안전하게 True로 간주해
+    기존 동작(텍스트도 검색에 반영)을 유지한다.
+    """
+    print("----- [CHECK QUERY DESCRIPTIVENESS] -----")
+
+    classify_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """당신은 사용자의 쇼핑 검색 텍스트가 "구체적인 묘사"인지
+                "막연한 요청"인지 판단하는 분류기입니다.
+
+                - 구체적 묘사: 색상, 종류, 브랜드, 용도, 특징, 가격대 등
+                  검색에 실제로 도움이 되는 단서를 포함
+                  (예: "초록색 구두", "가벼운 로봇청소기", "20만원 이하 무선 이어폰")
+                - 막연한 요청: 첨부한 이미지를 가리키기만 하고 구체적인
+                  단서가 전혀 없는 일반적인 문구
+                  (예: "이런 거 찾아줘", "비슷한 상품 추천해줘", "이거랑 똑같은 거 있어?")
+                """,
+            ),
+            ("user", "사용자 텍스트: {text}"),
+        ]
+    )
+
+    structured_llm = llm.with_structured_output(QueryDescriptiveness)
+    chain = classify_prompt | structured_llm
+
+    try:
+        result = chain.invoke({"text": text})
+        print(
+            f"[Query Descriptiveness] is_descriptive={result.is_descriptive} "
+            f"({result.reason})"
+        )
+        return result.is_descriptive
+    except Exception as e:
+        print(f"[Query Descriptiveness] 판단 실패, 안전하게 구체적으로 간주: {e}")
+        return True
+
+
+class RelevantProducts(BaseModel):
+    """이미지 라벨과 의미적으로 연관된 상품 id 목록"""
+
+    relevant_product_ids: list[str] = Field(
+        description="후보 상품 중, 이미지 라벨과 같은 카테고리/의미로 판단되는 상품의 id 목록. "
+        "관련 있는 상품이 하나도 없으면 빈 리스트."
+    )
+
+
+def filter_products_by_labels(
+    image_labels: list[str],
+    candidates: list[dict],
+) -> list[str] | None:
+    """
+    텍스트 질문 없이 이미지만 업로드된 경우에 사용.
+    이미지에서 감지된 라벨(영어)과 후보 상품 목록(제목은 한국어일 수 있음)을
+    LLM에게 함께 주고, "문자열이 정확히 일치하지 않아도" 의미적으로 같은
+    카테고리라고 판단되는 상품의 id만 구조화된 출력으로 받아온다.
+
+    반환값:
+    - list[str]: LLM이 실제로 판단을 마친 결과. 빈 리스트([])면
+      "연관된 상품이 정말 하나도 없다"는 뜻이므로 호출부는 그대로 빈 결과를 써야 한다.
+    - None: 라벨이 없거나 LLM 호출 자체가 실패해 "판단을 못한" 경우.
+      이때만 호출부가 원본 후보 목록으로 폴백해야 한다.
+    """
+    if not candidates or not image_labels:
+        print("[Filter By Labels] 라벨 또는 후보가 없어 판단 불가")
+        return None
+
+    candidates_text = "\n".join(
+        f"- (id: {c.get('product_id')}) {c.get('title') or '제목 없음'}"
+        for c in candidates
+    )
+
+    filter_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """당신은 쇼핑몰 이미지 검색 결과를 정리하는 어시스턴트입니다.
+                사용자는 텍스트 질문 없이 이미지 하나만 업로드했습니다.
+                아래 "이미지 라벨"은 Vision API가 그 이미지에서 감지한 대략적인
+                내용입니다 (영어일 수 있습니다).
+                "후보 상품 목록"은 그 이미지와 시각적 유사도가 높아 검색된
+                상품들이지만, 유사도 점수만 본 것이라 실제로는 관련 없는
+                카테고리의 상품이 섞여 있을 수 있습니다.
+
+                라벨과 상품명이 문자 그대로 일치하지 않아도 괜찮습니다.
+                의미/맥락으로 판단하세요
+                (예: 라벨 "video projector, gadget"이면 로봇청소기, 빔프로젝터,
+                전자기기류 상품과 의미적으로 연관될 수 있습니다).
+
+                이미지 라벨과 같은 카테고리/의미로 보이는 상품의 id만
+                relevant_product_ids에 담아 반환하세요. 후보에 없는 id를
+                지어내지 마세요. 관련 있는 상품이 하나도 없다면 빈 리스트를
+                반환하세요.
+                """,
+            ),
+            (
+                "user",
+                "이미지 라벨: {image_labels}\n\n후보 상품 목록:\n{candidates_text}",
+            ),
+        ]
+    )
+
+    structured_llm = llm.with_structured_output(RelevantProducts)
+    chain = filter_prompt | structured_llm
+
+    try:
+        result = chain.invoke(
+            {
+                "image_labels": ", ".join(image_labels),
+                "candidates_text": candidates_text,
+            }
+        )
+        print(f"[Filter By Labels] 연관 상품으로 판단된 id: {result.relevant_product_ids}")
+        return result.relevant_product_ids
+    except Exception as e:
+        print(f"[Filter By Labels] 구조화 출력 실패, 판단 불가로 처리: {e}")
+        return None
