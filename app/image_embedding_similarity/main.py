@@ -1,3 +1,29 @@
+"""
+로컬에서 실행하는 FastAPI 서버.
+- EC2 위 Qdrant에 원격 접속 (QDRANT_HOST 환경변수)
+- 사용자가 이미지/텍스트(또는 둘 다)를 입력 -> 유사 상품 검색 -> 결과 반환
+
+처리 흐름:
+1) 이미지가 있으면: 원본을 S3(input/{session_id}/{n}.jpg)에 저장
+2) 이미지가 있으면: Google Vision Crop Hints로 시각적으로 중요한 영역 감지
+   - 감지되면: 크롭 이미지와 원본 이미지를 각각 임베딩한 뒤
+     크롭 60% : 원본 40% 가중 평균(재정규화)해서 사용
+     (크롭만 쓰면 장식 디테일에 과도하게 집중해 상품 전체 맥락을 잃는
+     경우가 있어, 원본 맥락을 40% 비중으로 함께 반영한다)
+   - 감지 안 되면(또는 조건 미달): 원본 이미지만 임베딩
+3) 텍스트가 있으면: CLIP 텍스트 인코더로 임베딩
+4) 이미지+텍스트 둘 다 있으면: (2번의 이미지 벡터) + 텍스트 벡터를
+   50:50 평균(재정규화)해서 검색 쿼리로 사용. 하나만 있으면 그대로 사용
+
+실행: uv run uvicorn main:app --reload --port 8000 --app-dir .
+
+필요 환경변수:
+- QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION
+- GOOGLE_APPLICATION_CREDENTIALS (Google Vision 서비스 계정 키 경로)
+- AWS 자격증명 (boto3 기본 방식: 환경변수 또는 ~/.aws/credentials)
+"""
+import io
+
 from dotenv import load_dotenv
 
 # .env 파일을 환경변수로 로드. 반드시 다른 모듈(qdrant_utils, s3_utils 등)을
@@ -5,81 +31,49 @@ from dotenv import load_dotenv
 # os.getenv()로 QDRANT_HOST 등을 읽기 때문.
 load_dotenv()
 
-import io
 import numpy as np
-from fastapi import FastAPI, File, Form, Query, UploadFile, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
-from fastapi.templating import Jinja2Templates
-from pathlib import Path
+from fastapi import FastAPI, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
-from app.rag.agent import start_agent
-from app.image_embedding_similarity.embedder import ClipEmbedder
-from app.image_embedding_similarity.crop_utils import crop_with_padding, get_crop_hint_box
-from app.image_embedding_similarity.qdrant_utils import ensure_collection, get_client, search_similar
-from app.image_embedding_similarity.s3_utils import upload_input_image
+from embedder import ClipEmbedder
+from crop_utils import crop_with_padding, get_crop_hint_box
+from qdrant_utils import ensure_collection, get_client, search_similar
+from s3_utils import upload_input_image
 
-from contextlib import asynccontextmanager
-
-BASE_DIR = Path(__file__).resolve().parent
-print(BASE_DIR)
+app = FastAPI(title="이미지+텍스트 유사도 검색 API")
 
 # 크롭 이미지와 원본 이미지를 함께 임베딩할 때의 가중치
 # (크롭만 쓰면 장식 디테일에 과도하게 집중되는 문제가 있어 원본 맥락을 일부 반영)
 CROP_WEIGHT = 0.6
 ORIGINAL_WEIGHT = 0.4
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 서버 시작 시 1회: Qdrant 클라이언트 + CLIP 모델 로드
+# 서버 시작 시 1회: Qdrant 클라이언트 + CLIP 모델 로드
+qdrant_client = get_client()
+ensure_collection(qdrant_client)
+embedder = ClipEmbedder.get_instance()
 
-    # ── startup ──
-    app.state.qdrant_client = get_client()
-    ensure_collection(app.state.qdrant_client)
-    app.state.embedder = ClipEmbedder.get_instance()
-    
-    yield  # 서버 실행 중
-    
-    # ── shutdown ──
-    app.state.qdrant_client.close()  # 리소스 정리
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-app = FastAPI(lifespan=lifespan)
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
-@app.get("/", response_class=HTMLResponse)
-async def search(request: Request, s: str | None = None):
-    # print(q)
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html",
-    )
+@app.get("/")
+def index():
+    return FileResponse("static/index.html")
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@app.get("/query", response_class=HTMLResponse)
-def query(request: Request, s: str = "대한민국 수도는?"):
-    print(s)
-    result = start_agent(s)
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html",
-        context={"answer": result.get("messages")[-1].content},
-    )
-
 @app.post("/search")
 async def search(
-    request: Request,
     session_id: str = Form(...),
     message: str | None = Form(None),
     file: UploadFile | None = File(None),
     top_k: int = Query(default=5, ge=1, le=50),
 ):
-
-    client = request.app.state.qdrant_client
-    embedder = request.app.state.embedder   
     message = message.strip() if message else None
 
     if not file and not message:
@@ -142,7 +136,7 @@ async def search(
     else:
         query_vector = image_vector if image_vector is not None else text_vector
 
-    results = search_similar(client, query_vector, top_k=top_k)
+    results = search_similar(qdrant_client, query_vector, top_k=top_k)
 
     payload = [
         {

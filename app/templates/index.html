@@ -1,23 +1,599 @@
-<html>
+<!DOCTYPE html>
+<html lang="ko">
 
 <head>
-    <title>{{ title }}</title>
-    <link href="https://unpkg.com/mvp.css" rel="stylesheet" />
+    <meta charset="UTF-8" />
+    <title>이미지+텍스트 유사도 검색</title>
+
+    <!-- ============================================================
+         [스타일 시트]
+         채팅 UI 전반의 레이아웃·색상·애니메이션을 정의한다.
+         외부 CSS 프레임워크 없이 순수 CSS만 사용.
+    ============================================================ -->
+    <style>
+        /* ─── 전역 바디 스타일 ─── 
+           - 시스템 기본 폰트 적용
+           - 최대 너비 900px, 가운데 정렬로 읽기 편한 레이아웃 확보
+        */
+        body {
+            font-family: -apple-system, sans-serif;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 16px;
+            color: #222;
+        }
+
+        /* ─── 페이지 제목(h1) ─── */
+        h1 {
+            font-size: 22px;
+        }
+
+        /* ─── 채팅 로그 컨테이너 ─── 
+           - flex column으로 메시지를 위→아래 순서로 쌓음
+           - 최대 높이 65vh를 넘으면 스크롤 활성화
+        */
+        #chatLog {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            max-height: 65vh;
+            overflow-y: auto;
+            padding: 8px 4px;
+            margin-bottom: 12px;
+        }
+
+        /* ─── 메시지 래퍼(.msg) ─── 
+           - 공통: flex 컨테이너
+           - .user  → 오른쪽 정렬 (내가 보낸 메시지)
+           - .assistant → 왼쪽 정렬 (AI 응답 메시지)
+        */
+        .msg {
+            display: flex;
+        }
+
+        .msg.user {
+            justify-content: flex-end;
+        }
+
+        .msg.assistant {
+            justify-content: flex-start;
+        }
+
+        /* ─── 말풍선(bubble) 공통 스타일 ─── 
+           - 최대 너비 85%로 긴 텍스트가 화면을 가득 채우지 않도록 제한
+           - 둥근 모서리(14px)로 채팅 느낌
+        */
+        .bubble {
+            max-width: 85%;
+            border-radius: 14px;
+            padding: 10px 14px;
+            font-size: 14px;
+        }
+
+        /* ─── 사용자 말풍선 ─── 파란 배경 + 흰 글씨 */
+        .msg.user .bubble {
+            background: #4a7dff;
+            color: #fff;
+        }
+
+        /* ─── 어시스턴트 말풍선 ─── 
+           연한 회색 배경, 전체 너비 사용 (결과 카드 그리드를 담기 위함)
+        */
+        .msg.assistant .bubble {
+            background: #f3f3f5;
+            color: #222;
+            width: 100%;
+            max-width: 100%;
+        }
+
+        /* ─── 메시지 내 첨부 이미지 썸네일 ─── 
+           - 120×120 정사각형, object-fit: cover로 비율 유지 크롭
+        */
+        .msg-thumb {
+            display: block;
+            width: 120px;
+            height: 120px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+
+        /* ─── 상태 텍스트 (예: "검색 중...", "3개 유사 상품을 찾았습니다.") ─── */
+        .status-line {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        /* ─── 이미지 미리보기 행 ─── 
+           전송 전 첨부한 이미지의 작은 썸네일을 가로로 나열
+        */
+        #previewRow {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+
+        /* ─── 미리보기 썸네일 래퍼 ─── 
+           position: relative → 삭제 버튼(×)을 오른쪽 위에 절대 배치하기 위함
+        */
+        .preview-thumb {
+            position: relative;
+        }
+
+        /* ─── 미리보기 이미지 ─── 64×64 작은 정사각형 */
+        .preview-thumb img {
+            width: 64px;
+            height: 64px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+
+        /* ─── 미리보기 삭제 버튼(×) ─── 
+           - 썸네일 오른쪽 위에 원형으로 떠 있는 작은 닫기 버튼
+        */
+        .preview-thumb button {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            background: #333;
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            font-size: 11px;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        /* ─── 하단 입력 영역(composer) ─── 
+           - 첨부 버튼 | 텍스트 입력 | 전송 버튼을 가로로 배치
+           - 둥근 테두리로 입력 바 느낌
+        */
+        #composer {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            border: 1px solid #ddd;
+            border-radius: 12px;
+            padding: 8px 10px;
+        }
+
+        /* ─── 📎 첨부 버튼 ─── 정사각형(36px) 고정, 회색 배경 */
+        #attachBtn {
+            border: none;
+            background: #f0f0f0;
+            border-radius: 8px;
+            width: 36px;
+            height: 36px;
+            font-size: 18px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        /* ─── 텍스트 입력(textarea) ─── 
+           - flex:1로 남은 공간 전부 차지
+           - 테두리·아웃라인 제거해 깔끔한 인라인 느낌
+           - 최대 높이 120px까지만 늘어남
+        */
+        #messageInput {
+            flex: 1;
+            resize: none;
+            border: none;
+            outline: none;
+            font-size: 14px;
+            padding: 8px;
+            max-height: 120px;
+            font-family: inherit;
+        }
+
+        /* ─── 검색(전송) 버튼 ─── 파란 배경, 비활성 시 회색으로 변경 */
+        #sendBtn {
+            border: none;
+            background: #4a7dff;
+            color: #fff;
+            border-radius: 8px;
+            padding: 8px 16px;
+            cursor: pointer;
+            flex-shrink: 0;
+            font-size: 14px;
+        }
+
+        #sendBtn:disabled {
+            background: #ccc;
+            cursor: default;
+        }
+
+        /* ─── 검색 결과 그리드 ─── 
+           - auto-fill + minmax로 화면 크기에 따라 카드 수 자동 조절
+           - 최소 150px, 남은 공간을 균등 분배
+        */
+        #results {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 12px;
+        }
+
+        /* ─── 상품 카드 ─── 테두리 + 흰 배경, 가운데 정렬 */
+        .card {
+            border: 1px solid #e2e2e2;
+            background: #fff;
+            border-radius: 8px;
+            padding: 8px;
+            text-align: center;
+        }
+
+        /* ─── 카드 내 상품 이미지 ─── 130px 높이, 비율 유지 크롭 */
+        .card img {
+            width: 100%;
+            height: 130px;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+
+        /* ─── 카드 유사도 점수 ─── 파란색 작은 글씨 */
+        .card .score {
+            font-size: 12px;
+            color: #4a7dff;
+            margin-top: 6px;
+        }
+
+        /* ─── 카드 상품명 ─── 
+           - 고정 높이 32px + overflow:hidden으로 긴 제목 잘림 처리
+        */
+        .card .title {
+            font-size: 12px;
+            color: #444;
+            margin-top: 4px;
+            height: 32px;
+            overflow: hidden;
+        }
+    </style>
 </head>
 
 <body>
-    <header>
-        <h1>AI 쇼퍼</h1>
-    </header>
-    <center>
-        <form action="/query" method="get">
-            <input type="search" placeholder="질문을 입력하세요" name="s" />
-            <button type="submit">검색</button>
-        </form>
-    </center>
-    <main>
-        {{ answer }}
-    </main>
+    <!-- ============================================================
+         [페이지 제목]
+    ============================================================ -->
+    <h1>이미지+텍스트로 유사 상품 검색</h1>
+
+    <!-- ============================================================
+         [채팅 로그 영역]
+         사용자 질문과 AI 응답(검색 결과)이 시간순으로 쌓이는 컨테이너.
+         JS에서 동적으로 .msg 요소를 appendChild 한다.
+    ============================================================ -->
+    <div id="chatLog"></div>
+
+    <!-- ============================================================
+         [이미지 미리보기 행]
+         사용자가 파일을 첨부하면, 전송 전에 작은 썸네일을 보여주는 영역.
+         삭제 버튼(×)으로 첨부 취소 가능.
+    ============================================================ -->
+    <div id="previewRow"></div>
+
+    <!-- ============================================================
+         [입력 컴포저 (하단 입력 바)]
+         - 📎 첨부 버튼: 클릭 시 숨겨진 file input을 대신 트리거
+         - file input: display:none, 실제 파일 선택 다이얼로그 담당
+         - textarea: 검색 질의 텍스트 입력
+         - 검색 버튼: 폼 전송 트리거
+    ============================================================ -->
+    <div id="composer">
+        <!-- 📎 클릭 → 숨겨진 fileInput.click() 호출 -->
+        <button id="attachBtn" type="button" title="이미지 첨부">📎</button>
+        <!-- 실제 파일 선택 input (숨김 처리) -->
+        <input type="file" id="fileInput" accept="image/*" style="display:none" />
+        <!-- 검색 질의 텍스트 입력란 -->
+        <textarea id="messageInput" rows="1" placeholder="찾고 싶은 상품을 설명하거나, 이미지를 첨부해보세요"></textarea>
+        <!-- 검색 전송 버튼 -->
+        <button id="sendBtn" type="button">검색</button>
+    </div>
+
+    <!-- ============================================================
+         [자바스크립트]
+         채팅 UI 로직 전체를 담당한다:
+         1. 세션 관리 (탭 단위 세션 ID)
+         2. 파일 첨부·미리보기·삭제
+         3. 키보드 이벤트 (Enter 전송 / Shift+Enter 줄바꿈)
+         4. 메시지 렌더링 (사용자 / 어시스턴트)
+         5. 서버 API 호출 (/search) 및 결과 표시
+    ============================================================ -->
+    <script>
+        // ─── 설정 ───
+        const API_BASE = 'https://70crv2wl9a.execute-api.ap-northeast-2.amazonaws.com/dev';
+
+        // ─── 채팅 세션 상태 ───
+        let currentSessionId = null;
+
+        /* ===========================================================
+           [2] DOM 요소 참조 캐싱
+           ─────────────────────────────────────────────────────────────
+           자주 접근하는 DOM 요소를 변수에 미리 저장해 반복 조회를 방지.
+        =========================================================== */
+        const attachBtn = document.getElementById('attachBtn');     // 📎 첨부 버튼
+        const fileInput = document.getElementById('fileInput');     // 숨겨진 파일 input
+        const messageInput = document.getElementById('messageInput'); // 텍스트 입력 textarea
+        const sendBtn = document.getElementById('sendBtn');         // 검색(전송) 버튼
+        const previewRow = document.getElementById('previewRow');   // 이미지 미리보기 행
+        const chatLog = document.getElementById('chatLog');         // 채팅 로그 컨테이너
+
+        /* 현재 첨부된 파일 객체 (File | null) */
+        let selectedFile = null;
+
+        /* ===========================================================
+           [3] 유틸리티: HTML 이스케이프
+           ─────────────────────────────────────────────────────────────
+           사용자 입력을 innerHTML에 삽입할 때 XSS를 방지하기 위해
+           <, >, &, " 등의 특수문자를 이스케이프 처리한다.
+           DOM의 textContent → innerHTML 변환을 활용한 안전한 방식.
+        =========================================================== */
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        /* ===========================================================
+           [4] 파일 첨부 이벤트
+           ─────────────────────────────────────────────────────────────
+           - attachBtn 클릭 → 숨겨진 fileInput의 파일 선택 창을 연다
+           - 파일이 선택되면 selectedFile에 저장 후 미리보기 렌더링
+        =========================================================== */
+        attachBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                selectedFile = e.target.files[0];
+                renderPreview();
+            }
+        });
+
+        /* ===========================================================
+           [5] 이미지 미리보기 렌더링
+           ─────────────────────────────────────────────────────────────
+           - selectedFile이 있으면 Blob URL을 생성해 64×64 썸네일 표시
+           - 삭제 버튼(×)을 함께 렌더링 → 클릭 시 __removeFile() 호출
+           - selectedFile이 null이면 미리보기 영역을 비운다
+        =========================================================== */
+        function renderPreview() {
+            if (!selectedFile) {
+                previewRow.innerHTML = '';
+                return;
+            }
+            const url = URL.createObjectURL(selectedFile);
+            previewRow.innerHTML = `
+      <div class="preview-thumb">
+        <img src="${url}" />
+        <button type="button" onclick="window.__removeFile()">×</button>
+      </div>
+    `;
+        }
+
+        /* ===========================================================
+           [6] 첨부 파일 삭제 (미리보기에서 × 클릭 시)
+           ─────────────────────────────────────────────────────────────
+           - selectedFile을 null로, fileInput도 초기화
+           - renderPreview()를 다시 호출해 미리보기 영역을 비움
+           - window에 직접 할당하는 이유: innerHTML로 생성된 onclick에서
+             호출해야 하므로 전역 스코프에 노출이 필요
+        =========================================================== */
+        window.__removeFile = () => {
+            selectedFile = null;
+            fileInput.value = '';
+            renderPreview();
+        };
+
+        /* ===========================================================
+           [7] 키보드 이벤트: Enter 전송 / Shift+Enter 줄바꿈
+           ─────────────────────────────────────────────────────────────
+           일반 채팅 앱과 동일한 UX:
+           - Enter만 누르면 → 전송 (handleSend 호출)
+           - Shift+Enter → 줄바꿈 (기본 동작 유지)
+        =========================================================== */
+        messageInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+            }
+        });
+        /* 검색 버튼 클릭으로도 전송 가능 */
+        sendBtn.addEventListener('click', handleSend);
+
+        /* ===========================================================
+           [8] 사용자 메시지 렌더링
+           ─────────────────────────────────────────────────────────────
+           채팅 로그에 "사용자가 보낸 메시지"를 오른쪽 정렬 말풍선으로 추가.
+           - message: 텍스트 질의 (없으면 빈 문자열)
+           - imageUrl: 첨부 이미지의 Blob URL (없으면 이미지 생략)
+           - 추가 후 스크롤을 맨 아래로 이동
+        =========================================================== */
+        function appendUserMessage(message, imageUrl) {
+            const el = document.createElement('div');
+            el.className = 'msg user';
+            el.innerHTML = `
+      <div class="bubble">
+        ${message ? escapeHtml(message) : ''}
+        ${imageUrl ? `<img src="${imageUrl}" class="msg-thumb" />` : ''}
+      </div>
+    `;
+            chatLog.appendChild(el);
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+
+        /* ===========================================================
+           [9] 어시스턴트(AI) 메시지 렌더링
+           ─────────────────────────────────────────────────────────────
+           채팅 로그에 "AI 응답"을 왼쪽 정렬 말풍선으로 추가.
+           - statusText: 상태 메시지 (예: "검색 중...", "3개 유사 상품을 찾았습니다.")
+           - results: 검색 결과 배열 [{image_url, title, product_id, score}, ...]
+           - 결과를 .card 그리드로 렌더링하여 상품 이미지·이름·점수 표시
+           - onerror: 이미지 로드 실패 시 반투명 처리로 깨진 이미지 방지
+        =========================================================== */
+        function appendAssistantMessage(statusText, results) {
+            const el = document.createElement('div');
+            el.className = 'msg assistant';
+            const cardsHtml = (results || []).map(r => `
+      <div class="card">
+        <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
+        <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
+        <div class="score">score: ${r.score}</div>
+      </div>
+    `).join('');
+            el.innerHTML = `
+      <div class="bubble">
+        <div class="status-line">${escapeHtml(statusText)}</div>
+        <div id="results">${cardsHtml}</div>
+      </div>
+    `;
+            chatLog.appendChild(el);
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+
+
+        // async function getSessionId() {
+        //     let id = sessionStorage.getItem('search_session_id');
+        //     if (!id) {
+        //         const res = await fetch('/session', { method: 'POST' });
+        //         const data = await res.json();
+        //         id = data.session_id;  // ← 백엔드가 발급한 ID
+        //         sessionStorage.setItem('search_session_id', id);
+        //     }
+        //     return id;
+        // }
+
+        /* ===========================================================
+           [10] 핵심 로직: 검색 요청 전송 (handleSend)
+           ─────────────────────────────────────────────────────────────
+           1) 입력 검증: 텍스트도 이미지도 없으면 아무것도 하지 않음
+           2) 사용자 메시지를 채팅 로그에 먼저 표시 (낙관적 UI)
+           3) FormData 구성: session_id, message(선택), file(선택)
+           4) 입력창 즉시 초기화 → 응답 대기 중에도 다음 질문 준비 가능
+           5) "검색 중..." 로딩 말풍선을 미리 표시
+           6) POST /search?top_k=8 API 호출
+           7) 성공 시: 로딩 말풍선의 상태 텍스트와 결과 카드를 업데이트
+              - crop_applied가 true면 크롭 적용 안내 추가
+           8) 실패 시: 로딩 말풍선에 에러 메시지 표시
+        =========================================================== */
+        async function handleSend() {
+            const message = messageInput.value.trim();
+            /* 전송 직전에 selectedFile을 로컬 변수에 보관 (초기화 전에 캡처) */
+            const fileToUpload = selectedFile;
+
+            /* 텍스트와 이미지 둘 다 없으면 전송하지 않음 */
+            if (!fileToUpload && !message) {
+                return;
+            }
+
+            /* ── 사용자 메시지를 채팅 로그에 즉시 표시 ── */
+            const sentImageUrl = fileToUpload ? URL.createObjectURL(fileToUpload) : null;
+            appendUserMessage(message, sentImageUrl);
+
+            /* ── 입력창 즉시 초기화 (채팅 UX: 보낸 뒤 바로 다음 입력 가능) ── */
+            messageInput.value = '';
+            selectedFile = null;
+            fileInput.value = '';
+            renderPreview();
+
+            /* ── 로딩 상태: 버튼 비활성화 + "검색 중..." 말풍선 표시 ── */
+            sendBtn.disabled = true;
+            appendAssistantMessage('📤 업로드 준비 중...', []);
+            const loadingBubble = chatLog.lastElementChild; // 방금 추가한 로딩 말풍선 참조
+
+            try {
+                /* ===========================================================
+                   [10-A] S3 이미지 업로드 (이미지가 있을 때만)
+                   ─────────────────────────────────────────────────────────────
+                   1) API Gateway → Lambda에 presigned URL 요청
+                   2) presigned URL로 S3에 직접 PUT 업로드
+                   3) 받은 s3_key를 이후 검색 요청에 포함
+                =========================================================== */
+                let s3_key = null;
+
+                if (fileToUpload) {
+                    /* ── Step 1: Presigned URL 발급 요청 ── */
+                    loadingBubble.querySelector('.status-line').textContent = '📤 Presigned URL 발급 중...';
+
+                    const presignRes = await fetch(API_BASE + '/products', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            content_type: fileToUpload.type,
+                            session_id: currentSessionId  // 현재 세션 ID를 함께 전송
+                        })
+                    });
+                    const presignData = await presignRes.json();
+
+                    // 첫 업로드여서 세션 ID를 새로 발급받았다면 저장해둠
+                    if (!currentSessionId && presignData.session_id) {
+                        currentSessionId = presignData.session_id;
+                        console.log('새로운 세션이 시작되었습니다:', presignData.session_id);
+                    }
+
+                    /* ── Step 2: S3에 직접 업로드 (presigned PUT) ── */
+                    loadingBubble.querySelector('.status-line').textContent = '📤 S3에 이미지 업로드 중...';
+
+                    await fetch(presignData.presigned_url, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': fileToUpload.type },
+                        body: fileToUpload
+                    });
+
+                    s3_key = presignData.s3_key;
+                    loadingBubble.querySelector('.status-line').textContent = '✅ 이미지 업로드 완료! 검색 중...';
+                    console.log('S3 업로드 완료 → s3_key:', s3_key);
+                }
+
+                /* ===========================================================
+                   [10-B] 유사도 검색 API 호출
+                   ─────────────────────────────────────────────────────────────
+                   FormData에 session_id, message, file, s3_key를 담아 전송.
+                   s3_key가 있으면 서버가 S3에서 이미지를 가져와 처리할 수 있다.
+                =========================================================== */
+                loadingBubble.querySelector('.status-line').textContent = '🔍 유사 상품 검색 중...';
+
+                const formData = new FormData();
+                formData.append('session_id', currentSessionId);               // 세션 ID
+                if (message) formData.append('message', message);       // 텍스트 질의
+                if (fileToUpload) formData.append('file', fileToUpload); // 첨부 이미지 (로컬 서버용)
+                if (s3_key) formData.append('s3_key', s3_key);          // S3 키 (AWS 파이프라인용)
+
+                const res = await fetch('/search?top_k=8', { method: 'POST', body: formData });
+                const data = await res.json();
+                sendBtn.disabled = false; // 버튼 다시 활성화
+
+                /* ── 서버 측 에러 처리 ── */
+                if (data.error) {
+                    loadingBubble.querySelector('.status-line').textContent = '오류: ' + data.error;
+                    return;
+                }
+
+                /* ── 성공: 상태 텍스트 구성 ── */
+                let statusText = `${data.results.length}개 유사 상품을 찾았습니다.`;
+                // crop_applied: 서버가 이미지에서 주요 영역을 자동 감지·크롭했는지 여부
+                if (data.crop_applied) statusText += ' (주요 영역 감지 → 크롭해서 검색함)';
+
+                /* ── 로딩 말풍선을 실제 결과로 업데이트 ── 
+                   새 말풍선을 추가하는 게 아니라, 기존 로딩 말풍선의 내용물을 교체 */
+                loadingBubble.querySelector('.status-line').textContent = statusText;
+                loadingBubble.querySelector('#results').innerHTML = data.results.map(r => `
+        <div class="card">
+          <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
+          <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
+          <div class="score">score: ${r.score}</div>
+        </div>
+      `).join('');
+
+                /* 결과 표시 후 스크롤을 맨 아래로 */
+                chatLog.scrollTop = chatLog.scrollHeight;
+            } catch (err) {
+                /* ── 네트워크 에러 등 예외 처리 ── */
+                sendBtn.disabled = false;
+                loadingBubble.querySelector('.status-line').textContent = '요청 실패: ' + err;
+            }
+        }
+    </script>
 </body>
 
 </html>
