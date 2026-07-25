@@ -38,10 +38,16 @@ def upsert_points(client: QdrantClient, points: list[PointStruct]) -> None:
         client.upsert(collection_name=COLLECTION_NAME, points=points)
 
 
-def search_similar(client: QdrantClient, vector: list[float], top_k: int = 5):
+def search_similar(
+    client: QdrantClient,
+    vector: list[float],
+    top_k: int = 5,
+    score_threshold: float | None = None,  # [변경] feature/label-text: 스코어 1차 필터링을 위해 추가
+):
     response = client.query_points(
         collection_name=COLLECTION_NAME,
         query=vector,
         limit=top_k,
+        score_threshold=score_threshold,  # [변경] 이 값 미만인 결과는 Qdrant가 아예 제외
     )
     return response.points
