@@ -9,6 +9,8 @@ LANGSMITH_API_KEY="키 생성 필요"
 
 File_Path="경로/한글맞춤법_표준어규정_해설.pdf"
 
+GOOGLE_APPLICATION_CREDENTIALS="json_key 경로"
+
 DB_PATH="경로/chroma_db"
 
 SQL="sqlite:///경로/products.db"
