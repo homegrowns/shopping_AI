@@ -34,10 +34,8 @@ def get_meaningful_text_crop(
     이미지에서 신뢰도 높은 텍스트 영역을 감지해 (box, detected_text)를 반환한다.
     조건을 만족하는 텍스트가 없으면 None을 반환한다.
     """
-    from dotenv import load_dotenv
+
     from google.cloud import vision
-# .env 파일에서 GOOGLE_APPLICATION_CREDENTIALS 환경 변수 로드
-    load_dotenv()
 
     client = vision.ImageAnnotatorClient()
     image = vision.Image(content=image_bytes)

@@ -476,9 +476,86 @@
               - crop_applied가 true면 크롭 적용 안내 추가
            8) 실패 시: 로딩 말풍선에 에러 메시지 표시
         =========================================================== */
+        /* ===========================================================
+        1. S3 이미지 업로드 전용 함수
+        성공 시 s3_key 반환, 실패 시 에러 throw
+        =========================================================== */
+        async function uploadImageToS3(fileToUpload, loadingBubble) {
+            loadingBubble.querySelector('.status-line').textContent = '📤 Presigned URL 발급 중...';
+
+            const presignRes = await fetch(API_BASE + '/products', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content_type: fileToUpload.type,
+                    session_id: currentSessionId  // 전역 변수 참조
+                })
+            });
+
+            if (!presignRes.ok) {
+                throw new Error('Presigned URL 발급에 실패했습니다.');
+            }
+
+            const presignData = await presignRes.json();
+
+            // 첫 업로드여서 세션 ID를 새로 발급받았다면 갱신 (전역 변수 업데이트)
+            if (!currentSessionId && presignData.session_id) {
+                currentSessionId = presignData.session_id;
+                console.log('새로운 세션이 시작되었습니다:', currentSessionId);
+            }
+
+            loadingBubble.querySelector('.status-line').textContent = '📤 S3에 이미지 업로드 중...';
+
+            const uploadRes = await fetch(presignData.presigned_url, {
+                method: 'PUT',
+                headers: { 'Content-Type': fileToUpload.type },
+                body: fileToUpload
+            });
+
+            if (!uploadRes.ok) {
+                throw new Error('S3 이미지 업로드에 실패했습니다.');
+            }
+
+            loadingBubble.querySelector('.status-line').textContent = '✅ 이미지 업로드 완료! 검색 중...';
+            console.log('S3 업로드 완료 → s3_key:', presignData.s3_key);
+
+            return presignData.s3_key;
+        }
+
+        /* ===========================================================
+        2. 유사 상품 검색 전용 함수
+        성공 시 검색 결과(데이터) 반환, 실패 시 에러 throw
+        =========================================================== */
+        async function searchSimilarProducts(message, fileToUpload, s3Key, loadingBubble) {
+            loadingBubble.querySelector('.status-line').textContent = '🔍 유사 상품 검색 중...';
+
+            const formData = new FormData();
+            formData.append('session_id', currentSessionId);
+            if (message) formData.append('message', message);
+            if (fileToUpload) formData.append('file', fileToUpload);
+            if (s3Key) formData.append('s3_key', s3Key);
+
+            const res = await fetch('/search?top_k=8', { method: 'POST', body: formData });
+
+            if (!res.ok) {
+                throw new Error(`검색 서버 응답 오류 (상태 코드: ${res.status})`);
+            }
+
+            const data = await res.json();
+
+            if (data.error) {
+                // 서버에서 의도적으로 에러를 내려준 경우
+                throw new Error(data.error);
+            }
+
+            return data;
+        }
+
+        /* ===========================================================
+        3. 메인 핸들러 (이벤트 연결 함수)
+        =========================================================== */
         async function handleSend() {
             const message = messageInput.value.trim();
-            /* 전송 직전에 selectedFile을 로컬 변수에 보관 (초기화 전에 캡처) */
             const fileToUpload = selectedFile;
 
             /* 텍스트와 이미지 둘 다 없으면 전송하지 않음 */
@@ -490,7 +567,7 @@
             const sentImageUrl = fileToUpload ? URL.createObjectURL(fileToUpload) : null;
             appendUserMessage(message, sentImageUrl);
 
-            /* ── 입력창 즉시 초기화 (채팅 UX: 보낸 뒤 바로 다음 입력 가능) ── */
+            /* ── 입력창 즉시 초기화 ── */
             messageInput.value = '';
             selectedFile = null;
             fileInput.value = '';
@@ -499,98 +576,40 @@
             /* ── 로딩 상태: 버튼 비활성화 + "검색 중..." 말풍선 표시 ── */
             sendBtn.disabled = true;
             appendAssistantMessage('📤 업로드 준비 중...', []);
-            const loadingBubble = chatLog.lastElementChild; // 방금 추가한 로딩 말풍선 참조
+            const loadingBubble = chatLog.lastElementChild;
 
             try {
-                /* ===========================================================
-                   [10-A] S3 이미지 업로드 (이미지가 있을 때만)
-                   ─────────────────────────────────────────────────────────────
-                   1) API Gateway → Lambda에 presigned URL 요청
-                   2) presigned URL로 S3에 직접 PUT 업로드
-                   3) 받은 s3_key를 이후 검색 요청에 포함
-                =========================================================== */
-                let s3_key = null;
+                let s3Key = null;
 
+                // [Step 1] 이미지가 있다면 S3 업로드
                 if (fileToUpload) {
-                    /* ── Step 1: Presigned URL 발급 요청 ── */
-                    loadingBubble.querySelector('.status-line').textContent = '📤 Presigned URL 발급 중...';
-
-                    const presignRes = await fetch(API_BASE + '/products', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            content_type: fileToUpload.type,
-                            session_id: currentSessionId  // 현재 세션 ID를 함께 전송
-                        })
-                    });
-                    const presignData = await presignRes.json();
-
-                    // 첫 업로드여서 세션 ID를 새로 발급받았다면 저장해둠
-                    if (!currentSessionId && presignData.session_id) {
-                        currentSessionId = presignData.session_id;
-                        console.log('새로운 세션이 시작되었습니다:', presignData.session_id);
-                    }
-
-                    /* ── Step 2: S3에 직접 업로드 (presigned PUT) ── */
-                    loadingBubble.querySelector('.status-line').textContent = '📤 S3에 이미지 업로드 중...';
-
-                    await fetch(presignData.presigned_url, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': fileToUpload.type },
-                        body: fileToUpload
-                    });
-
-                    s3_key = presignData.s3_key;
-                    loadingBubble.querySelector('.status-line').textContent = '✅ 이미지 업로드 완료! 검색 중...';
-                    console.log('S3 업로드 완료 → s3_key:', s3_key);
+                    s3Key = await uploadImageToS3(fileToUpload, loadingBubble);
                 }
 
-                /* ===========================================================
-                   [10-B] 유사도 검색 API 호출
-                   ─────────────────────────────────────────────────────────────
-                   FormData에 session_id, message, file, s3_key를 담아 전송.
-                   s3_key가 있으면 서버가 S3에서 이미지를 가져와 처리할 수 있다.
-                =========================================================== */
-                loadingBubble.querySelector('.status-line').textContent = '🔍 유사 상품 검색 중...';
+                // [Step 2] 검색 요청
+                const data = await searchSimilarProducts(message, fileToUpload, s3Key, loadingBubble);
 
-                const formData = new FormData();
-                formData.append('session_id', currentSessionId);               // 세션 ID
-                if (message) formData.append('message', message);       // 텍스트 질의
-                if (fileToUpload) formData.append('file', fileToUpload); // 첨부 이미지 (로컬 서버용)
-                if (s3_key) formData.append('s3_key', s3_key);          // S3 키 (AWS 파이프라인용)
-
-                const res = await fetch('/search?top_k=8', { method: 'POST', body: formData });
-                const data = await res.json();
-                sendBtn.disabled = false; // 버튼 다시 활성화
-
-                /* ── 서버 측 에러 처리 ── */
-                if (data.error) {
-                    loadingBubble.querySelector('.status-line').textContent = '오류: ' + data.error;
-                    return;
-                }
-
-                /* ── 성공: 상태 텍스트 구성 ── */
+                // [Step 3] 결과 렌더링
                 let statusText = `${data.results.length}개 유사 상품을 찾았습니다.`;
-                // crop_applied: 서버가 이미지에서 주요 영역을 자동 감지·크롭했는지 여부
                 if (data.crop_applied) statusText += ' (주요 영역 감지 → 크롭해서 검색함)';
 
-                /* ── 로딩 말풍선을 실제 결과로 업데이트 ── 
-                   새 말풍선을 추가하는 게 아니라, 기존 로딩 말풍선의 내용물을 교체 */
                 loadingBubble.querySelector('.status-line').textContent = statusText;
                 loadingBubble.querySelector('#results').innerHTML = data.results.map(r => `
-        <div class="card">
-          <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
-          <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
-          <div class="score">score: ${r.score}</div>
-        </div>
-      `).join('');
+                    <div class="card">
+                        <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
+                        <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
+                        <div class="score">score: ${r.score}</div>
+                    </div>
+                `).join('');
 
-                /* 결과 표시 후 스크롤을 맨 아래로 */
-                chatLog.scrollTop = chatLog.scrollHeight;
             } catch (err) {
-                /* ── 네트워크 에러 등 예외 처리 ── */
+                /* 에러 발생: S3 업로드, 검색 API 중 어디서 에러를 던졌든 여기서 통합 처리됨 */
+                loadingBubble.querySelector('.status-line').textContent = '요청 실패: ' + err.message;
+                console.error("작업 중 오류 발생:", err);
+            } finally {
+                /* 성공하든 실패하든 무조건 실행되는 영역 */
                 sendBtn.disabled = false;
-                loadingBubble.querySelector('.status-line').textContent = '요청 실패: ' + err;
+                chatLog.scrollTop = chatLog.scrollHeight;
             }
         }
     </script>

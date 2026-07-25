@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 # .env 파일을 환경변수로 로드. 반드시 다른 모듈(qdrant_utils, s3_utils 등)을
 # import하기 "전에" 실행되어야 한다 - 그 모듈들은 import되는 시점에
 # os.getenv()로 QDRANT_HOST 등을 읽기 때문.
+# 애플리케이션의 시작점(main.py)에서 딱 한 번만 .env를 로드하므로, 
+# 하위 모듈들에는 load_dotenv() 코드를 쓰지 않아도 돼서 코드가 깔끔해집니다.
 load_dotenv()
 
 import io
@@ -17,7 +19,6 @@ from app.rag.agent import start_agent
 from app.image_embedding_similarity.embedder import ClipEmbedder
 from app.image_embedding_similarity.crop_utils import crop_with_padding, get_crop_hint_box
 from app.image_embedding_similarity.qdrant_utils import ensure_collection, get_client, search_similar
-from app.image_embedding_similarity.s3_utils import upload_input_image
 
 from contextlib import asynccontextmanager
 
@@ -102,14 +103,6 @@ async def search(
                 status_code=400, content={"error": "이미지 파일을 읽을 수 없습니다."}
             )
 
-        # 1) 원본 이미지를 S3에 저장 (세션별 순번 파일명, 사용자가 입력한 그대로 저장)
-        try:
-            s3_key = upload_input_image(session_id, original_image)
-        except Exception as e:
-            print(f"S3 업로드 실패 (검색은 계속 진행): {e}")
-
-        # 2) Crop Hints로 시각적으로 중요한 영역 감지
-        #    -> 감지되면 크롭+원본을 6:4로 가중 평균, 감지 안 되면 원본만 사용
         try:
             box = get_crop_hint_box(contents, original_image.size)
         except Exception as e:
