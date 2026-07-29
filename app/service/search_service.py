@@ -30,14 +30,21 @@ def build_query_vector(
     # 100% 영어(알파벳/숫자/기호)인지 확인
     if message is not None and message.isascii():
         print(f"[번역 생략] 영문 감지됨, 번역 없이 진행: {message}")
-        text_vector = embedder.embed_text(message)
+        msg = message
         eng_text = True
+    #영어가 아닌경우 번역
     elif message is not None and message.isascii()==False:
-        translated = GoogleTranslator(source='ko', target='en').translate(message)
-        print(f"[google 번역] {message} -> {translated}") # 디버그용 출력   
-        text_vector = embedder.embed_text(translated)
+        msg = GoogleTranslator(source='ko', target='en').translate(message)
+        print(f"[google 번역] {message} -> {msg} \n") # 디버그용 출력 
         eng_text = True
     
+    # 메시지에서 " that" 앞까지만 잘라와서 text_vector로 사용
+    index = msg.find(" that")
+    if index != -1:
+        result = msg[:index]
+        print(result)  # 출력: Recommended jeans
+        text_vector = embedder.embed_text(result)
+
     if contents is not None:
         original_image = Image.open(io.BytesIO(contents)).convert("RGB")
 
@@ -71,11 +78,8 @@ def build_query_vector(
 
     # 이미지 벡터와 텍스트 벡터가 모두 존재하는 경우
     if image_vector and text_vector:
-        # 두 벡터의 평균을 구해 멀티모달 쿼리 벡터 생성
-        combined = (np.array(image_vector) + np.array(text_vector)) / 2
-        # L2 정규화
-        combined = combined / np.linalg.norm(combined)
-        query_vector = combined.tolist()
+# TODO: visoin label text 를 나중에 주입하여 text_vector 유사도 검사에 도움주는 기능
+        query_vector = text_vector
     else:
         # 둘 중 하나만 존재하면 그것을 쿼리 벡터로 사용
         query_vector = image_vector or text_vector

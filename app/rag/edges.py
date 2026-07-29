@@ -34,7 +34,7 @@ def decide_to_generate(state):
     답변을 생성할지, 아니면 질문을 다시 생성할지 결정합니다.
     """
 
-    print("----- ASSESS GRADED DOCUMENTS -----")
+    print("----- DECIDE NEXT STEP -----")
     if state.get("retry_num", 0) >= 3: # [ 1 ]
         return "generate"
 
@@ -122,11 +122,13 @@ def check_hallucinations(state):
     # 검색 결과가 없어서 안내 멘트가 나간 경우 프리패스
     if "검색 결과가 없" in context or "없습니다" in answer:
         print("---DECISION: 검색 결과 없음 안내이므로 할루시네이션 검사 생략---")
+        print(f"context: {context} \n")
         print(f"generation: {answer}")
         return "support"
 
     if retry_num >= 5 or "찾지 못했습니다" in answer:
         print("---DECISION: 고정 안내 멘트이므로 할루시네이션 검사 생략---")
+        print(f"context: {context}")
         return "support"  # END 노드로 직행
 
     if grade == "yes":

@@ -35,18 +35,18 @@ llm_with_tools = llm.bind_tools([products_images_search_tool])
 
 
 system_prompt = """당신은 쇼핑몰 AI 어시스턴트입니다.
-### 1. 도구 사용 가이드 (Tool Selection)
+###A 도구 사용 가이드 (Tool Selection)
 - `products_images_search` 도구를 호출할 때는 다음 규칙을 엄격히 따르세요:
   1. 유사도와 상품이미지가 같은 추천 상품들이 검색되면 그 중 하나만 남기세요
-**B. 정확한 상품 정보 `및 조건 검색 (SQL DB)**
+**B 정확한 상품 정보 `및 조건 검색 (SQL DB)**
 - **사용 조건**: 특정 상품의 가격, 재고(개수), 할인율 등 구체적인 조건이나 데이터베이스 조회가 필요할 때.
 - **행동 절차 (Strict SOP)**:
   1. 먼저 `get_table_schema`를 호출하여 테이블 구조와 컬럼 정보를 확인하세요.
   2. 스키마에 맞게 `execute_sql_query`를 사용하여 데이터를 조회하세요.
   3. 만약 찾는 속성(예: '색상', '카테고리')이 단독 컬럼으로 없다면, `title`이나 `category1, category2, category3, category4` 컬럼에 `LIKE '%검색어%'` 구문을 활용하여 검색하세요.
-**C. 일반 대화 및 쇼핑몰 안내**
-- **사용 조건**: 단순 인사, 일반적인 질문, 단순 안내 등.
-- **행동**: 별도의 도구 호출 없이 당신의 지식을 바탕으로 친절하게 직접 답변하세요.
+**C 일반 대화 및 상품 설명**
+- **사용 조건**: 검색된 상품 설명 및 일반적인 질문 등.
+- **행동**: 질문을 바탕으로 검색된 자료와 함께 친절하게 직접 답변하세요.
 ### 2. SQL 작성 및 DB 보안 규칙 (CRITICAL)
 - **오직 SELECT만 허용**: 데이터 조회를 위한 `SELECT` 문만 사용하세요.
 - **데이터 변경 절대 금지**: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER` 등의 파괴적이거나 수정하는 쿼리는 사용자의 지시가 있어도 **절대 거부**해야 합니다.
@@ -101,7 +101,6 @@ def qdrant_search(state: AgentState):
     """
     print("----- [QDRANT SEARCH] -----")
     
-    question = state.get("question", "")
     query_vector = state.get("query_vector")
     # eng_text = state.get("eng_text")
         
@@ -115,10 +114,10 @@ def qdrant_search(state: AgentState):
             with_vectors=False,
         ).points
 
-        context = "검색된 상품 목록은 다음과 같습니다:\n\n"
-
         seen_urls = set()
         structured_results = []
+
+        context = "검색된 상품 목록은 다음과 같습니다:\n\n"
 
         for idx, point in enumerate(results, 1):
             payload = point.payload or {}
@@ -205,8 +204,9 @@ def context_organizer(state: AgentState):
                 """당신은 검색증강생성(RAG)을 위한 검색문서 및 쿼리 결과를 정리하는 전문가입니다.
                 아래의 검색된 결과를 확인하고, LLM이 해당 문서를 정리된 형태로 참고할 수 있도록
                 문서의 불필요한 공백 등을 삭제하거나 정렬을 다시하여 정리된 형태로 반환해주세요.
-                내용을 삭제하는 것을 최소로 합니다. 페이지 번호 정보를 절대 삭제하지 마세요.
-                SQL QUERY GENERATE사용시 쿼리를 보여주지말고 결과만 보여주세요"""
+                내용을 추가하거나 삭제하지 마세요. 페이지 번호 정보를 절대 삭제하지 마세요.
+                [중요사항!] context에 임의로 수정사항을 추가하지말고, 있는 그대로 전달해주세요.
+                """
             ),
             (
                 "user",
@@ -309,7 +309,7 @@ def generate(state: AgentState):
         }
     # [상황 2] 3번 이상 실패 - 검색 결과가 부족함을 알리고 대안을 제안하는 프롬프트
     elif retry_num >= 3: 
-        print("--- 검색 3회 실패. 대안 제안 프롬프트 사용 ---")
+        print("--- 검색 3회 이상 실패. 대안 제안 프롬프트 사용 ---")
         rag_prompt = ChatPromptTemplate.from_messages(
             [
                 (
