@@ -21,10 +21,11 @@ def build_query_vector(
     Returns: (query_vector, crop_applied, eng_text)
     """
     image_vector = None
+    text_vector = None
     original_image = None
     box = None
+    msg = ''
     crop_applied = False
-    text_vector = None
     eng_text = False
 
     # 100% 영어(알파벳/숫자/기호)인지 확인
@@ -44,6 +45,9 @@ def build_query_vector(
         result = msg[:index]
         print(result)  # 출력: Recommended jeans
         text_vector = embedder.embed_text(result)
+    else:
+        print("that 키워드가 없습니다. 전체 쿼리를 벡터화 합니다.") 
+        text_vector = embedder.embed_text(msg)
 
     if contents is not None:
         original_image = Image.open(io.BytesIO(contents)).convert("RGB")
@@ -79,7 +83,15 @@ def build_query_vector(
     # 이미지 벡터와 텍스트 벡터가 모두 존재하는 경우
     if image_vector and text_vector:
 # TODO: visoin label text 를 나중에 주입하여 text_vector 유사도 검사에 도움주는 기능
+#      1. 이미지와 텍스트질문이 찾는 카테고리가 같으면 이미지를 벡터화후 query_vector에 활용
         query_vector = text_vector
+    if " than" in msg:
+        print("두 벡터의 평균을 구해 멀티모달 쿼리 벡터 생성.") 
+        # 두 벡터의 평균을 구해 멀티모달 쿼리 벡터 생성
+        combined = (np.array(image_vector) + np.array(text_vector)) / 2
+        # L2 정규화
+        combined = combined / np.linalg.norm(combined)
+        query_vector = combined.tolist()
     else:
         # 둘 중 하나만 존재하면 그것을 쿼리 벡터로 사용
         query_vector = image_vector or text_vector
