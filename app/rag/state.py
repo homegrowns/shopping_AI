@@ -1,6 +1,8 @@
 from typing import List, Optional, Any
 from langgraph.graph import MessagesState, StateGraph
 
+# TODO : eng_text 제거하기
+
 # 1. 그래프 내부에서 굴러갈 전체 상태(State)
 class AgentState(MessagesState):
     question: Optional[str] = None
