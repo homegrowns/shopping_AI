@@ -2,11 +2,13 @@
 ### 아래 내용을 복사하여 .env 파일을 만들고 실제 값을 입력하세요.
 ### (주의: .env 파일은 절대 GitHub에 커밋하지 마세요!)
  
-'''TODO :  
+```
+TODO :  
    1. eng_text 제거하기
    2. sql_tool 붙이기
    3. 벡터DB 데이터 추가하기
-   '''
+```
+
 ```python
 # 1. API Keys (필수)
 GOOGLE_API_KEY="본인의_Google_API_Key_입력"
