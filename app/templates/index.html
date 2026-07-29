@@ -414,8 +414,8 @@
             el.className = 'msg user';
             el.innerHTML = `
       <div class="bubble">
-        ${message ? escapeHtml(message) : ''}
         ${imageUrl ? `<img src="${imageUrl}" class="msg-thumb" />` : ''}
+        ${message ? escapeHtml(message) : ''}
       </div>
     `;
             chatLog.appendChild(el);
@@ -468,14 +468,19 @@
            ─────────────────────────────────────────────────────────────
            1) 입력 검증: 텍스트도 이미지도 없으면 아무것도 하지 않음
            2) 사용자 메시지를 채팅 로그에 먼저 표시 (낙관적 UI)
-           3) 입력창 즉시 초기화 → 응답 대기 중에도 다음 질문 준비 가능
-           4) "업로드 준비 중..." 로딩 말풍선을 미리 표시
-           5) Step 1: 파일 첨부 시 uploadImageToS3() 호출 (S3 직접 업로드 및 s3_key 획득)
-           6) Step 2: searchSimilarProducts() 호출 (s3_key와 메시지를 포함해 검색 API 요청)
-           7) Step 3 (성공): 로딩 말풍선의 상태 텍스트와 결과 카드를 업데이트
+           3) FormData 구성: session_id, message(선택), file(선택)
+           4) 입력창 즉시 초기화 → 응답 대기 중에도 다음 질문 준비 가능
+           5) "검색 중..." 로딩 말풍선을 미리 표시
+           6) POST /search?top_k=8 API 호출
+           7) 성공 시: 로딩 말풍선의 상태 텍스트와 결과 카드를 업데이트
               - crop_applied가 true면 크롭 적용 안내 추가
-           8) Step 3 (실패): catch 블록에서 각 함수가 던진 구체적인 에러 메시지를 표시
+           8) 실패 시: 로딩 말풍선에 에러 메시지 표시
         =========================================================== */
+        // TODO: [Step 2] , [Step 2] llm 응답으로 대체
+        /* ===========================================================
+    1. S3 이미지 업로드 전용 함수
+    성공 시 s3_key 반환, 실패 시 에러 throw
+    =========================================================== */
         async function uploadImageToS3(fileToUpload, loadingBubble) {
             loadingBubble.querySelector('.status-line').textContent = '📤 Presigned URL 발급 중...';
 
@@ -522,13 +527,13 @@
         2. 유사 상품 검색 전용 함수
         성공 시 검색 결과(데이터) 반환, 실패 시 에러 throw
         =========================================================== */
-        async function searchSimilarProducts(message, fileToUpload, s3Key, loadingBubble) {
+        async function searchSimilarProducts(message, s3Key, loadingBubble) {
             loadingBubble.querySelector('.status-line').textContent = '🔍 유사 상품 검색 중...';
 
             const formData = new FormData();
             formData.append('session_id', currentSessionId);
             if (message) formData.append('message', message);
-            if (fileToUpload) formData.append('file', fileToUpload);
+            // if (fileToUpload) formData.append('file', fileToUpload);
             if (s3Key) formData.append('s3_key', s3Key);
 
             const res = await fetch('/search?top_k=8', { method: 'POST', body: formData });
@@ -583,7 +588,7 @@
                 }
 
                 // [Step 2] 검색 요청
-                const data = await searchSimilarProducts(message, fileToUpload, s3Key, loadingBubble);
+                const data = await searchSimilarProducts(message, s3Key, loadingBubble);
 
                 // [Step 3] 결과 렌더링
                 let statusText = `${data.results.length}개 유사 상품을 찾았습니다.`;
@@ -591,12 +596,12 @@
 
                 loadingBubble.querySelector('.status-line').textContent = statusText;
                 loadingBubble.querySelector('#results').innerHTML = data.results.map(r => `
-                    <div class="card">
-                        <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
-                        <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
-                        <div class="score">score: ${r.score}</div>
-                    </div>
-                `).join('');
+                <div class="card">
+                    <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
+                    <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
+                    <div class="score">score: ${r.score}</div>
+                </div>
+            `).join('');
 
             } catch (err) {
                 /* 에러 발생: S3 업로드, 검색 API 중 어디서 에러를 던졌든 여기서 통합 처리됨 */

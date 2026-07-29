@@ -19,6 +19,10 @@ def execute_sql_query(query: str) -> str:
     테이블 목록: products
     """
     try:
+        # ✅ 실제로 SELECT만 허용
+        if not query.strip().upper().startswith("SELECT"):
+            return "에러: SELECT 쿼리만 실행 가능합니다."
+        
         result = db.run(query)
         return str(result)
     except Exception as e:

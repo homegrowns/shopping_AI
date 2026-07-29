@@ -9,7 +9,7 @@ config.js
 
 #sqllite
 products.db
-
+chroma_db/
 dataset/
 secrets/
 

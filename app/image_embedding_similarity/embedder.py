@@ -16,6 +16,7 @@ class ClipEmbedder:
 
     def __init__(self, model_name: str = MODEL_NAME):
         self.model = SentenceTransformer(model_name)
+        self.model.max_seq_length = 77  # ← 이 한 줄 추가 (CLIP 최대 토큰 제한)
 
     @classmethod
     def get_instance(cls) -> "ClipEmbedder":

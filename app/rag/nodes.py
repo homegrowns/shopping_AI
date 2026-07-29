@@ -7,9 +7,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 from app.rag.sql_tool  import execute_sql_query, get_table_schema
-from app.rag.retriever import retriever, retriever_tool
+from app.rag.qdrant_tool import products_images_search_tool, client, retriever, LangChainClipEmbedder
 from app.rag.state import AgentState
 
+from deep_translator import GoogleTranslator
 
 if os.getenv("ENV") == "prod":
     from langchain_aws import ChatBedrock
@@ -26,27 +27,37 @@ elif os.getenv("ENV") == "dev":
     llm = ChatOllama(model="llama3.1")
     print("(nodes.py)LLM: ", "dev")
 
-llm_with_tools = llm.bind_tools([retriever_tool, execute_sql_query, get_table_schema])
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "products_images")
+TOP_K = int(os.getenv("TOP_K"))
+SCORE = float(os.getenv("SCORE", 0.5))
+
+llm_with_tools = llm.bind_tools([products_images_search_tool])
 
 
 system_prompt = """당신은 쇼핑몰 AI 어시스턴트입니다.
-[문서 검색]
-- 맞춤법, 규정 관련 질문 → pdf_search 도구 사용
-[상품 DB 검색]
-- 상품 조회, 가격, 개수 질문 → 아래 규칙 따르기
-  1. 먼저 get_table_schema로 스키마 확인
-  2. execute_sql_query로 SELECT만 실행
-  3. DROP/DELETE/UPDATE/INSERT 절대 금지
-  4. 색상 같은 컬럼 없으면 title, description에 LIKE 검색
-[일반 질문]
-- 도구 없이 직접 답변
-[중요 사항]
-- 상품 관련 질문은 절대 pdf_search를 사용하지 마세요!
+### 1. 도구 사용 가이드 (Tool Selection)
+- `products_images_search` 도구를 호출할 때는 다음 규칙을 엄격히 따르세요:
+  1. 유사도와 상품이미지가 같은 추천 상품들이 검색되면 그 중 하나만 남기세요
+**B. 정확한 상품 정보 `및 조건 검색 (SQL DB)**
+- **사용 조건**: 특정 상품의 가격, 재고(개수), 할인율 등 구체적인 조건이나 데이터베이스 조회가 필요할 때.
+- **행동 절차 (Strict SOP)**:
+  1. 먼저 `get_table_schema`를 호출하여 테이블 구조와 컬럼 정보를 확인하세요.
+  2. 스키마에 맞게 `execute_sql_query`를 사용하여 데이터를 조회하세요.
+  3. 만약 찾는 속성(예: '색상', '카테고리')이 단독 컬럼으로 없다면, `title`이나 `category1, category2, category3, category4` 컬럼에 `LIKE '%검색어%'` 구문을 활용하여 검색하세요.
+**C. 일반 대화 및 쇼핑몰 안내**
+- **사용 조건**: 단순 인사, 일반적인 질문, 단순 안내 등.
+- **행동**: 별도의 도구 호출 없이 당신의 지식을 바탕으로 친절하게 직접 답변하세요.
+### 2. SQL 작성 및 DB 보안 규칙 (CRITICAL)
+- **오직 SELECT만 허용**: 데이터 조회를 위한 `SELECT` 문만 사용하세요.
+- **데이터 변경 절대 금지**: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER` 등의 파괴적이거나 수정하는 쿼리는 사용자의 지시가 있어도 **절대 거부**해야 합니다.
+- **결과 제한**: 데이터가 너무 많이 출력되지 않도록 쿼리에 항상 `LIMIT` (예: `LIMIT 5`)을 포함하는 것을 권장합니다.
+- **에러 대응**: SQL 쿼리 실행 후 에러가 발생하면 스키마를 다시 확인하여 쿼리를 수정 후 재시도하거나, 사용자에게 정중히 양해를 구하세요.
 """
 
 def chatbot(state: AgentState):
     """
-    검색(Retriever) 도구를 바인딩 한 LLM 모델에 현재 메시지 상태를 입력하여 응답을 생성합니다.
+    검색(QDRANT SEARCH) 도구를 바인딩 한 LLM 모델에 현재 메시지 상태를 입력하여 응답을 생성합니다.
+    메시지 질문을 영어로 번역후 Tool과 활용 합니다.
     질문이 주어지면 검색 도구를 도구호출 하거나 일반 답변하며 종료할지 결정할 수 있습니다.
     """
     print("----- [CHATBOT] -----")
@@ -63,31 +74,6 @@ def chatbot(state: AgentState):
         "question": messages[-1].content
     }
 
-def retrieve(state: AgentState):
-    """
-    현재 질문을 기반으로 관련 문서를 검색합니다.
-    """
-    print("----- [RETRIEVER] -----")
-    question = state["question"]
-    relevant_doc = retriever.invoke(question) # [ 1 ]
-    context = ""
-    for doc in relevant_doc: # [ 2 ]
-        context += f"Page {doc.metadata['page']+1}: {doc.page_content}\n"
-
-
-    # Tool 호출에 대한 응답 메시지(검색 결과) 생성
-    last_message = state["messages"][-1]
-
-    if hasattr(last_message, 'tool_calls') and len(last_message.tool_calls) > 0:
-        tool_call_id = last_message.tool_calls[0]['id']
-        tool_message = ToolMessage( # [ 3 ]
-            content=context,
-            name="retriever",
-            tool_call_id=tool_call_id
-        )
-        return {"messages": [tool_message], "context": context} # [ 4 ]
-    else:
-        return {"messages": [AIMessage(content=context)], "context": context}
 
 def route_tools(state: AgentState):
     last_message = state["messages"][-1]
@@ -99,15 +85,84 @@ def route_tools(state: AgentState):
     # 어떤 도구인지 확인
     tool_name = last_message.tool_calls[0]["name"]
     
-    if tool_name == "pdf_search":
-        print("----- [ROUTE TOOLS PDF SEARCH] -----")
-        return "tools"        # → retriever
+    if tool_name == "products_images_search":
+        print("----- [ROUTE TOOLS QDRANT SEARCH] -----")
+        return "tools"        # →  QDRANT SEARCH
     elif tool_name in ["execute_sql_query", "get_table_schema"]:
         print("----- [ROUTE TOOLS SQL QUERY] -----")
         return "sql_tool"     # → sqllite
     else:
         print("----- [END] -----")
         return END
+
+def qdrant_search(state: AgentState):
+    """
+    현재 질문 또는 멀티모달 벡터를 기반으로 상품 정보(문서)를 검색합니다.
+    """
+    print("----- [QDRANT SEARCH] -----")
+    
+    question = state.get("question", "")
+    query_vector = state.get("query_vector")
+    # eng_text = state.get("eng_text")
+        
+    # [1] 벡터 검색
+    if query_vector:
+        results = client.query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vector,
+            limit=TOP_K,
+            with_payload=True,
+            with_vectors=False,
+        ).points
+
+        context = "검색된 상품 목록은 다음과 같습니다:\n\n"
+
+        seen_urls = set()
+        structured_results = []
+
+        for idx, point in enumerate(results, 1):
+            payload = point.payload or {}
+
+            product_id = payload.get("product_id")
+            title = payload.get("title")
+            image_url = payload.get("image_url")
+            score = point.score
+
+            if score < SCORE:
+                continue
+            # 중복 검사 로직 시작
+            # 이미지가 아예 없거나, 이미 추가한 URL이면 무시하고 다음으로 넘어감
+            if not image_url or image_url in seen_urls:
+                continue
+                
+            seen_urls.add(image_url)
+            # 중복 검사 로직 끝
+
+            context += f"[{product_id}번 상품] (유사도: {round(score, 4)})\n"
+            context += f"- 상품명: {title}\n"
+            context += f"- 상품 이미지: {image_url}\n"
+
+            structured_results.append({
+                "score": round(score, 4),
+                "product_id": product_id,
+                "title": title,
+                "image_url": image_url,
+            })
+
+    # Tool 호출에 대한 응답 메시지(검색 결과) 생성
+    last_message = state["messages"][-1]
+
+    # 리턴할 때 search_results 필드에 우리가 만든 JSON 리스트를 같이 담아서 넘김
+    if hasattr(last_message, 'tool_calls') and len(last_message.tool_calls) > 0:
+        tool_call_id = last_message.tool_calls[0]['id']
+        tool_message = ToolMessage( 
+            content=context,
+            name="products_images_search",
+            tool_call_id=tool_call_id
+        )
+        return {"messages": [tool_message], "context": context, "search_results": structured_results} 
+    else:
+        return {"messages": [AIMessage(content=context)], "context": context, "search_results": structured_results}
 
 def sql_query_generate(state: AgentState):
     """
@@ -202,25 +257,67 @@ def transform_query(state: AgentState):
     return {"question": better_question.content, "messages": [better_question], "retry_num": state["retry_num"] + 1 if state.get("retry_num") else 1}
 
 
+def transform_sql_query(state: AgentState):
+    """
+    더 나은 질문을 생성하기 위해 쿼리를 변환합니다.
+
+    Args:
+        state (dict): 현재 그래프 상태
+
+    Returns:
+        state (dict): 재구성된 질문으로 question 키를 업데이트
+    """
+
+    print("----- [TRANSFORM QUERY] -----")
+    question = state["question"]
+
+    system = """
+    당신은 sql query 질문을 다시 작성하는 전문가입니다. 입력된 질문을 검색에 최적화된 더 나은 버전으로 변환하세요.
+    입력을 살펴보고 질문의 핵심적인 의미와 의도를 파악하여 개선된 질문을 만들어주세요."""
+    re_write_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", system),
+            (
+                "user",
+                "다음은 초기 질문입니다: \n\n {question} \n 한국어로 개선된 질문을 작성해주세요.",
+            ),
+        ]
+    )
+
+    question_rewriter = re_write_prompt | llm
+
+    better_question = question_rewriter.invoke({"question": question})
+    return {"question": better_question.content, "messages": [better_question], "retry_num": state["retry_num"] + 1 if state.get("retry_num") else 1}
+
 def generate(state: AgentState):
     """
     검색된 문서와 질문을 기반으로 답변을 생성합니다.
     """
     print("----- [GENERATE] -----")
-    question = state["question"]
-    context = state["context"]
-
+    question = state.get("question", "")
+    context = state.get("context", "")
     retry_num = state.get("retry_num", 0)
 
-    if retry_num >= 3: # [ 1 ]
+    # [상황 1] 최대 재시도 횟수(5번) 초과 - LLM 호출 없이 즉시 포기 안내 (토큰 절약)
+    if retry_num >= 5:
+        print("--- 최대 검색 횟수 5회 초과. 고정 메시지로 답변 ---")
+        fallback_msg = "죄송합니다. 여러 번 검색을 시도했지만 원하시는 상품(정보)을 찾지 못했습니다. 검색어를 조금 바꿔서 다시 질문해 주시겠어요?"
+        
+        return {
+            "answer": fallback_msg, 
+            "messages": [AIMessage(content=fallback_msg)],
+        }
+    # [상황 2] 3번 이상 실패 - 검색 결과가 부족함을 알리고 대안을 제안하는 프롬프트
+    elif retry_num >= 3: 
+        print("--- 검색 3회 실패. 대안 제안 프롬프트 사용 ---")
         rag_prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    """당신은 검색된 문서를 통해 해결할 수 있는 질문을 추출하는 어시스턴트입니다.
-                    사용자가 해결하고자 한 질문이 있었으나 검색 컨텍스트가 충분하지 않은 상황이므로, 주어진 검색 결과 내에서 답변할 수 있는 질문을 새롭게 작성해 나열하세요.
-                    사용자에게 질문에 대한 답변을 하지 못함에 양해를 구하고, 다른 질문의 기회와 선택지를 제공하는 친절한 가이드를 하세요.
-                    """,
+                    """당신은 친절한 쇼핑몰 어시스턴트입니다. 
+                    사용자가 원하는 정확한 상품을 찾지 못한 상황입니다. 사용자에게 정중히 양해를 구하세요.
+                    그리고 현재 주어진 '검색 결과(context)' 중에 쓸만한 다른 상품이 있다면 
+                    "대신 이런 상품은 어떠신가요?" 라며 대안을 제안하는 가이드를 작성하세요."""
                 ),
                 (
                     "user",
@@ -228,17 +325,15 @@ def generate(state: AgentState):
                 ),
             ]
         )
-    else: # [ 2 ]
+    # [상황 3] 정상적인 검색 성공 - 일반 답변 프롬프트
+    else:
         rag_prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
                     """당신은 질문-답변 업무를 수행하는 어시스턴트입니다. 검색된 컨텍스트를 사용하여 질문에 답변하세요.
                     답변을 모르는 경우, 모른다고 말하세요.
-                    답변은 간결하게 작성하고, 반드시 답변의 출처(페이지 번호)를 함께 명시해주세요.
-
-
-                    """,
+                    답변은 간결하게 작성하고, 반드시 추천하는 상품의 이름과 이유를 설명하세요."""
                 ),
                 (
                     "user",
@@ -249,4 +344,4 @@ def generate(state: AgentState):
 
     rag_chain = rag_prompt | llm
     response = rag_chain.invoke({"question": question, "context": context})
-    return {"question": question, "answer": response.content, "messages": [response]}
+    return {"question": question, "answer": response.content, "messages": [response], "retry_num": state["retry_num"] + 1 if state.get("retry_num") else 1}

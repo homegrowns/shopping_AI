@@ -38,4 +38,8 @@ dependencies = [
     "numpy==1.26.4",
     "python-multipart==0.0.9",
     "google-cloud-vision==3.7.4",
+    "langchain-qdrant>=1.0.0",
+    "langchain-huggingface>=1.2.2",
+    "aioboto3>=7.0.0",
+    "deep-translator>=1.11.4",
 ]
