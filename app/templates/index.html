@@ -591,8 +591,12 @@
                 const data = await searchSimilarProducts(message, s3Key, loadingBubble);
 
                 // [Step 3] 결과 렌더링
-                let statusText = `${data.results.length}개 유사 상품을 찾았습니다.`;
-                if (data.crop_applied) statusText += ' (주요 영역 감지 → 크롭해서 검색함)';
+                let statusText = '';
+                if (data.results.length == 0 && !data.answer) {
+                    statusText = '유사한 상품을 찾지 못했습니다.';
+                }
+                else statusText = data.answer;
+
 
                 loadingBubble.querySelector('.status-line').textContent = statusText;
                 loadingBubble.querySelector('#results').innerHTML = data.results.map(r => `

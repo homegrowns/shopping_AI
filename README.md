@@ -4,7 +4,7 @@
  
 ```
 TODO :  
-   1. eng_text 제거하기
+   1. eng_text 제거하기 v
    2. sql_tool 붙이기
    3. 벡터DB 데이터 추가하기
 ```

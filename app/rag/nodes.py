@@ -5,10 +5,12 @@ load_dotenv()
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
+from langchain_core.messages import ToolMessage, AIMessage, HumanMessage, SystemMessage
 from app.rag.sql_tool  import execute_sql_query, get_table_schema
 from app.rag.qdrant_tool import products_images_search_tool, client, retriever, LangChainClipEmbedder
+from app.rag.communication_tool import handle_small_talk
 from app.rag.state import AgentState
+from langgraph.graph import END
 
 from deep_translator import GoogleTranslator
 
@@ -31,39 +33,73 @@ COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "products_images")
 TOP_K = int(os.getenv("TOP_K"))
 SCORE = float(os.getenv("SCORE", 0.5))
 
-llm_with_tools = llm.bind_tools([products_images_search_tool])
+llm_with_tools = llm.bind_tools([products_images_search_tool, handle_small_talk])
 
 
-system_prompt = """당신은 쇼핑몰 AI 어시스턴트입니다.
-###A 도구 사용 가이드 (Tool Selection)
-- `products_images_search` 도구를 호출할 때는 다음 규칙을 엄격히 따르세요:
-  1. 유사도와 상품이미지가 같은 추천 상품들이 검색되면 그 중 하나만 남기세요
-**B 정확한 상품 정보 `및 조건 검색 (SQL DB)**
-- **사용 조건**: 특정 상품의 가격, 재고(개수), 할인율 등 구체적인 조건이나 데이터베이스 조회가 필요할 때.
-- **행동 절차 (Strict SOP)**:
-  1. 먼저 `get_table_schema`를 호출하여 테이블 구조와 컬럼 정보를 확인하세요.
-  2. 스키마에 맞게 `execute_sql_query`를 사용하여 데이터를 조회하세요.
-  3. 만약 찾는 속성(예: '색상', '카테고리')이 단독 컬럼으로 없다면, `title`이나 `category1, category2, category3, category4` 컬럼에 `LIKE '%검색어%'` 구문을 활용하여 검색하세요.
-**C 일반 대화 및 상품 설명**
-- **사용 조건**: 검색된 상품 설명 및 일반적인 질문 등.
-- **행동**: 질문을 바탕으로 검색된 자료와 함께 친절하게 직접 답변하세요.
-### 2. SQL 작성 및 DB 보안 규칙 (CRITICAL)
-- **오직 SELECT만 허용**: 데이터 조회를 위한 `SELECT` 문만 사용하세요.
-- **데이터 변경 절대 금지**: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER` 등의 파괴적이거나 수정하는 쿼리는 사용자의 지시가 있어도 **절대 거부**해야 합니다.
-- **결과 제한**: 데이터가 너무 많이 출력되지 않도록 쿼리에 항상 `LIMIT` (예: `LIMIT 5`)을 포함하는 것을 권장합니다.
-- **에러 대응**: SQL 쿼리 실행 후 에러가 발생하면 스키마를 다시 확인하여 쿼리를 수정 후 재시도하거나, 사용자에게 정중히 양해를 구하세요.
+system_prompt = """
+당신은 쇼핑몰 AI 어시스턴트입니다.
+
+## 이름
+- 조디
+
+## 역할
+- 상품 추천 및 상품 관련 질문에 답변합니다.
+- 일반적인 대화도 자연스럽게 응답합니다.
+- 사용자가 "안녕" "hello"등 일상적인 인사를 건네면, 도구를 절대 사용하지 말고 "안녕하세요! 무엇을 도와드릴까요?"라고 답변하세요
+
+## 도구 사용 규칙
+
+### products_images_search
+다음 경우 반드시 호출하세요.
+- 상품 추천 요청
+- 비슷한 상품 찾기
+- 코디 추천
+- 이미지 기반 상품 추천
+- 특정 상품을 찾는 요청
+
+검색 결과를 사용할 때는 다음을 지키세요.
+- 동일한 상품 또는 동일한 이미지의 중복 추천은 제거합니다.
+- 검색 결과를 기반으로만 답변합니다.
+- 검색 결과가 없으면 없다고 안내합니다.
+
+
+## 다음과 같은 경우에는 도구를 호출하지 않습니다.
+- 쇼핑과 관계없는 질문
+- 상품의 총 개수
+- 민감한 기술 질문
+- 상품의 종류가 명시 되지않은 경우
+
+## 일반 대화(handle_small_talk)
+다음 경우 반드시 호출하세요
+- 인사
+- 어색한 문장의 질문 (예시: Soccer player loss recommendation)
+- 상품 질문 같지않은 문장
+- 완성 되지 않은 문장(예시: grey)
+- 잡담
+- 일반 상식
+
+## 답변 규칙
+- 답변은 간결하고 자연스럽게 작성합니다.
+- 유사도 언급 금지
+- 상품의 종류가 명시 되지않은 경우 '찾고자하시는 상품에 대해 좀 더 자세히 질문해주세요.' 라고 답변하세요.
+- 상품번호 언급 금지
+- 추천하는 상품명과 추천 이유를 함께 설명합니다.
+- 검색 결과에 없는 정보는 추측하지 않습니다. (예시: 회색 상품이 있습니다.)
+- 인풋값의 카테고리정보를 모르면 답변으로 언급하지마시오
+- 상품의 총 개수 같은 질문은 모른다고 하세요
+- IT 기술 질문 무시 예) 파이썬, 랭체인 등등
+- 유사도 0.7 이상의 같은 종류상품이 아니면 같은상품 아니라고 말하고 최대한 비슷한 상품을 추천했다고 말합니다.
 """
 
 def chatbot(state: AgentState):
     """
     검색(QDRANT SEARCH) 도구를 바인딩 한 LLM 모델에 현재 메시지 상태를 입력하여 응답을 생성합니다.
-    메시지 질문을 영어로 번역후 Tool과 활용 합니다.
     질문이 주어지면 검색 도구를 도구호출 하거나 일반 답변하며 종료할지 결정할 수 있습니다.
     """
     print("----- [CHATBOT] -----")
     # system_prompt를 MessagesState에 추가하기 위해 AI Message로 변환
-    system_message = AIMessage(content=system_prompt)
-    
+    # system_message = AIMessage(content=system_prompt)
+    system_message = SystemMessage(content=system_prompt)
     # state에 system 메시지를 먼저 추가하고 나머지 메시지들을 뒤에 이어 붙입니다.
     messages = [system_message] + state["messages"]
     
@@ -71,7 +107,9 @@ def chatbot(state: AgentState):
 
     return {
         "messages": [response],
-        "question": messages[-1].content
+        # 기존: messages[-1].content
+        # state["messages"]의 마지막 값을 꺼내는 것이 더 안전할 수 있습니다.
+        "question": state["messages"][-1].content 
     }
 
 
@@ -88,9 +126,10 @@ def route_tools(state: AgentState):
     if tool_name == "products_images_search":
         print("----- [ROUTE TOOLS QDRANT SEARCH] -----")
         return "tools"        # →  QDRANT SEARCH
-    elif tool_name in ["execute_sql_query", "get_table_schema"]:
-        print("----- [ROUTE TOOLS SQL QUERY] -----")
-        return "sql_tool"     # → sqllite
+    elif tool_name == "handle_small_talk":
+        print("----- [ROUTE small_talk] -----")
+        # 핵심 수정: 그래프 이미지에 있는 노드 이름과 똑같이 맞춰줍니다!
+        return "small_talk" 
     else:
         print("----- [END] -----")
         return END
@@ -102,7 +141,6 @@ def qdrant_search(state: AgentState):
     print("----- [QDRANT SEARCH] -----")
     
     query_vector = state.get("query_vector")
-    # eng_text = state.get("eng_text")
         
     # [1] 벡터 검색
     if query_vector:
@@ -116,8 +154,7 @@ def qdrant_search(state: AgentState):
 
         seen_urls = set()
         structured_results = []
-
-        context = "검색된 상품 목록은 다음과 같습니다:\n\n"
+        context = "검색된 상품 목록은 다음과 같습니다:\n"
 
         for idx, point in enumerate(results, 1):
             payload = point.payload or {}
@@ -159,9 +196,52 @@ def qdrant_search(state: AgentState):
             name="products_images_search",
             tool_call_id=tool_call_id
         )
-        return {"messages": [tool_message], "context": context, "search_results": structured_results} 
+        return {"messages": [tool_message], "context": context, "search_results": structured_results, "answer": context} 
     else:
-        return {"messages": [AIMessage(content=context)], "context": context, "search_results": structured_results}
+        return {"messages": [AIMessage(content=context)], "context": context, "search_results": structured_results, "answer": context}
+
+def small_talk(state: AgentState):
+    """
+    일상 대화 도구가 호출되었을 때 실행되는 노드입니다.
+    """
+    print("----- [HANDLE SMALL TALK NODE] -----")
+    
+    last_message = state["messages"][-1]
+    
+    if hasattr(last_message, 'tool_calls') and len(last_message.tool_calls) > 0:
+        tool_call = last_message.tool_calls[0]
+        tool_call_id = tool_call['id']
+        
+        # LLM이 도구를 호출하면서 작성한 'response' 파라미터 값을 꺼냅니다.
+        args = tool_call.get('args', {})
+        
+        # 만약 LLM이 파라미터를 깜빡하고 안 넘겼을 경우를 대비해 기본값을 설정해 줍니다.
+        content = args.get('response', "안녕하세요! 쇼핑 어시스턴트입니다. 무엇을 도와드릴까요?")
+        
+        tool_message = ToolMessage( 
+            content=content,
+            name="handle_small_talk",
+            tool_call_id=tool_call_id
+        )
+        
+        # 검색 결과가 없으므로 search_results는 빈 리스트([])로 넘겨 프론트엔드 에러를 방지합니다.
+        return {
+            "messages": [tool_message], 
+            "context": content, 
+            
+            # 2.  프론트엔드가 화면에 띄울 수 있게 여기서 "answer"에 직접 대답을 넣어줍니다!
+            "answer": content,  
+            
+            # 3. 엑스박스 방지를 위해 빈 배열을 줍니다.
+            "search_results": []
+        }
+    else:
+        # 혹시 도구 호출 정보가 없는 예외 상황을 위한 안전장치
+        return {
+            "messages": [AIMessage(content="무엇을 도와드릴까요? 원하시는 상품을 말씀해주세요.")], 
+            "context": "", 
+            "search_results": []
+        }
 
 def sql_query_generate(state: AgentState):
     """
@@ -291,7 +371,7 @@ def transform_sql_query(state: AgentState):
 
 def generate(state: AgentState):
     """
-    검색된 문서와 질문을 기반으로 답변을 생성합니다.
+    검색된 문서 및 질문을 기반으로 답변을 생성합니다.
     """
     print("----- [GENERATE] -----")
     question = state.get("question", "")
@@ -299,8 +379,8 @@ def generate(state: AgentState):
     retry_num = state.get("retry_num", 0)
 
     # [상황 1] 최대 재시도 횟수(5번) 초과 - LLM 호출 없이 즉시 포기 안내 (토큰 절약)
-    if retry_num >= 5:
-        print("--- 최대 검색 횟수 5회 초과. 고정 메시지로 답변 ---")
+    if retry_num >= 3:
+        print("--- 최대 검색 횟수 3회 초과. 고정 메시지로 답변 ---")
         fallback_msg = "죄송합니다. 여러 번 검색을 시도했지만 원하시는 상품(정보)을 찾지 못했습니다. 검색어를 조금 바꿔서 다시 질문해 주시겠어요?"
         
         return {
@@ -308,13 +388,13 @@ def generate(state: AgentState):
             "messages": [AIMessage(content=fallback_msg)],
         }
     # [상황 2] 3번 이상 실패 - 검색 결과가 부족함을 알리고 대안을 제안하는 프롬프트
-    elif retry_num >= 3: 
-        print("--- 검색 3회 이상 실패. 대안 제안 프롬프트 사용 ---")
+    elif retry_num >= 1: 
+        print("--- 검색 실패. 대안 제안 프롬프트 사용 ---")
         rag_prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    """당신은 친절한 쇼핑몰 어시스턴트입니다. 
+                    """당신은 센스 있고 친절한 쇼핑몰 어시스턴트입니다. 
                     사용자가 원하는 정확한 상품을 찾지 못한 상황입니다. 사용자에게 정중히 양해를 구하세요.
                     그리고 현재 주어진 '검색 결과(context)' 중에 쓸만한 다른 상품이 있다면 
                     "대신 이런 상품은 어떠신가요?" 라며 대안을 제안하는 가이드를 작성하세요."""
@@ -331,13 +411,20 @@ def generate(state: AgentState):
             [
                 (
                     "system",
-                    """당신은 질문-답변 업무를 수행하는 어시스턴트입니다. 검색된 컨텍스트를 사용하여 질문에 답변하세요.
-                    답변을 모르는 경우, 모른다고 말하세요.
-                    답변은 간결하게 작성하고, 반드시 추천하는 상품의 이름과 이유를 설명하세요."""
+                    """당신은 센스 있고 친절한 쇼핑몰 어시스턴트입니다. 
+                    
+                    [절대 지켜야 할 답변 규칙]
+                    1. 환각 금지: 절대로 가상의 상품명, 가격, 색상을 지어내지 마세요.
+                    2. 반말금지: 항상 존댓말을 사용하세요.
+                    3. 목록 나열 금지: 검색 결과(context)에 있는 상품 정보를 줄글이나 번호 매기기(1, 2, 3...)로 길게 나열하지 마세요. (사용자 화면 하단에 상품 카드가 자동으로 따로 표시됩니다.)
+                    4. 간결한 안내: 정확한 상품이 없을 경우, 사용자에게 정중히 양해를 구하고 "대신 아래에 추천해 드리는 비슷한 상품들을 확인해 보세요!"라는 뉘앙스로 1~2문장 이내의 짧고 친절한 인사말만 작성하세요.
+                    5. 불필요한 사족(예: '제가 제공한 검색 결과 중에는~')은 모두 빼고 자연스럽게 대화하듯 말하세요.
+                    6. 문장을 최대한 자연스럽게 만들어 주세요 (예: 이바지를 어울리는 스타일 신발 찾으시는군요! X -> 이 바지와 어울리는 스타일 신발 찾으시는군요!)
+                    """
                 ),
                 (
                     "user",
-                    "질문: {question} \n\n검색 결과: {context} \n\n답변:",
+                    "질문: {question} \n\n검색 결과: {context} \n\n안내 멘트:",
                 ),
             ]
         )

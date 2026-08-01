@@ -82,15 +82,23 @@ async def search(
         
     if not contents and not message:
         return JSONResponse(status_code=400, content={"error": "이미지 또는 텍스트 중 하나는 입력해야 합니다."})
+    elif not contents:
+        print("이미지가 없습니다.")
+    elif not message:
+        print("메세지가 없습니다.")
+
 
     # ── 비즈니스 로직 ──
-    query_vector, crop_applied, eng_text = build_query_vector(contents, message, embedder)
+    query_vector, crop_applied = build_query_vector(contents, message, embedder)
     # RAG 파이프시작
-    final_state = start_agent(message, query_vector, eng_text)
+    final_state = start_agent(message, query_vector)
 
     structured_results = final_state.get("search_results")
+    answer_text = final_state.get("answer", "")
 
     print(f"\n final_state: {structured_results}")
+    print(f"\n answer_text: {answer_text}")
     return JSONResponse(content={
-        "results": structured_results
+        "results": structured_results,  # 프론트엔드의 data.results 가 됨
+        "answer": answer_text           # 프론트엔드의 data.answer 가 됨
     })
