@@ -17,7 +17,7 @@ from app.rag.edges import decide_to_generate, check_hallucinations
 graph_builder = StateGraph(AgentState, input_schema=InputState)
 graph_builder.add_node("chatbot", chatbot)
 graph_builder.add_node("qdrant_search", qdrant_search)
-# graph_builder.add_node("sqllite", sql_query_generate)handle_small_talk
+# graph_builder.add_node("sqllite", sql_query_generate)
 graph_builder.add_node("small_talk", small_talk)
 
 graph_builder.add_edge(START, "chatbot")
@@ -36,6 +36,7 @@ graph_builder.add_node("context_organizer", context_organizer)
 graph_builder.add_node("transform_query", transform_query)
 # graph_builder.add_node("transform_sql_query", transform_sql_query)
 graph_builder.add_node("generate", generate)
+
 
 graph_builder.add_edge("qdrant_search", "context_organizer")
 graph_builder.add_conditional_edges(

@@ -17,17 +17,17 @@ from deep_translator import GoogleTranslator
 if os.getenv("ENV") == "prod":
     from langchain_aws import ChatBedrock
     llm = ChatBedrock(model_id="anthropic.claude-3-5-sonnet...")
-    print("(nodes.py) LLM: ", "prod")
+    print("(nodes.py) LLM: ", "prod anthropic.claude-3-5-sonnet")
 
 elif os.getenv("ENV") == "local":
     from langchain_google_genai import ChatGoogleGenerativeAI
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-    print("(nodes.py) LLM: ", "local")
+    print("(nodes.py) LLM: ", "local gemini-2.5-flash")
 
 elif os.getenv("ENV") == "dev":
     from langchain_ollama import ChatOllama
     llm = ChatOllama(model="llama3.1")
-    print("(nodes.py)LLM: ", "dev")
+    print("(nodes.py)LLM: ", "dev llama3.1")
 
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "products_images")
 TOP_K = int(os.getenv("TOP_K"))
@@ -52,10 +52,12 @@ system_prompt = """
 ### products_images_search
 다음 경우 반드시 호출하세요.
 - 상품 추천 요청
+- 상품 이름 (예시: 야구모자)
 - 비슷한 상품 찾기
 - 코디 추천
 - 이미지 기반 상품 추천
 - 특정 상품을 찾는 요청
+- 관련 상품 카테고리 질문 안내
 
 검색 결과를 사용할 때는 다음을 지키세요.
 - 동일한 상품 또는 동일한 이미지의 중복 추천은 제거합니다.
@@ -73,22 +75,18 @@ system_prompt = """
 다음 경우 반드시 호출하세요
 - 인사
 - 어색한 문장의 질문 (예시: Soccer player loss recommendation)
-- 상품 질문 같지않은 문장
 - 완성 되지 않은 문장(예시: grey)
-- 잡담
-- 일반 상식
 
 ## 답변 규칙
-- 답변은 간결하고 자연스럽게 작성합니다.
-- 유사도 언급 금지
-- 상품의 종류가 명시 되지않은 경우 '찾고자하시는 상품에 대해 좀 더 자세히 질문해주세요.' 라고 답변하세요.
-- 상품번호 언급 금지
-- 추천하는 상품명과 추천 이유를 함께 설명합니다.
+- 답변은 간결하고 질문에 맞게 작성합니다.
+- 이 이미지와 유사한 상품을 찾아주세요. 라는 인풋메세지가 있으면 "올리신 사진"과 "유사한 상품"이라고 언급하세요
+- description을 잘보고 추천이유를 고객이 이해하기 쉽게 잘 설명합니다.
 - 검색 결과에 없는 정보는 추측하지 않습니다. (예시: 회색 상품이 있습니다.)
-- 인풋값의 카테고리정보를 모르면 답변으로 언급하지마시오
+- 이전 질문과 연관지어서 답변하지마세요.
 - 상품의 총 개수 같은 질문은 모른다고 하세요
+- 상품이나 상품추천 질문아니면 답변하지말고 상품관련 질문만 해달라고 하세요
 - IT 기술 질문 무시 예) 파이썬, 랭체인 등등
-- 유사도 0.7 이상의 같은 종류상품이 아니면 같은상품 아니라고 말하고 최대한 비슷한 상품을 추천했다고 말합니다.
+- 유사도 0.8 이상의 같은 종류상품이 아니면 같은상품 아니라고 말하고 최대한 비슷한 상품을 추천했다고 말합니다.
 """
 
 def chatbot(state: AgentState):
@@ -152,7 +150,7 @@ def qdrant_search(state: AgentState):
             with_vectors=False,
         ).points
 
-        seen_urls = set()
+        seen_ids = set()
         structured_results = []
         context = "검색된 상품 목록은 다음과 같습니다:\n"
 
@@ -160,7 +158,8 @@ def qdrant_search(state: AgentState):
             payload = point.payload or {}
 
             product_id = payload.get("product_id")
-            title = payload.get("title")
+            # title = payload.get("title")
+            description = payload.get("description")
             image_url = payload.get("image_url")
             score = point.score
 
@@ -168,20 +167,22 @@ def qdrant_search(state: AgentState):
                 continue
             # 중복 검사 로직 시작
             # 이미지가 아예 없거나, 이미 추가한 URL이면 무시하고 다음으로 넘어감
-            if not image_url or image_url in seen_urls:
+            if not product_id or product_id in seen_ids:
                 continue
                 
-            seen_urls.add(image_url)
+            seen_ids.add(product_id)
             # 중복 검사 로직 끝
 
             context += f"[{product_id}번 상품] (유사도: {round(score, 4)})\n"
-            context += f"- 상품명: {title}\n"
+            # context += f"- 상품명: {title}\n"
+            context += f"- 상품 설명: {description}\n"
             context += f"- 상품 이미지: {image_url}\n"
 
             structured_results.append({
                 "score": round(score, 4),
                 "product_id": product_id,
-                "title": title,
+                "description": description,
+                # "title": title,
                 "image_url": image_url,
             })
 
@@ -379,16 +380,16 @@ def generate(state: AgentState):
     retry_num = state.get("retry_num", 0)
 
     # [상황 1] 최대 재시도 횟수(5번) 초과 - LLM 호출 없이 즉시 포기 안내 (토큰 절약)
-    if retry_num >= 3:
-        print("--- 최대 검색 횟수 3회 초과. 고정 메시지로 답변 ---")
-        fallback_msg = "죄송합니다. 여러 번 검색을 시도했지만 원하시는 상품(정보)을 찾지 못했습니다. 검색어를 조금 바꿔서 다시 질문해 주시겠어요?"
+    if retry_num >= 4:
+        print("--- 최대 검색 횟수 4회 초과. 고정 메시지로 답변 ---")
+        fallback_msg = "죄송합니다. 여러 번 검색을 시도하고 상품을 찾았으나 만족스러운 검색 결과를 찾지 못했습니다. 검색어를 조금 바꿔서 다시 질문해 주시겠어요?"
         
         return {
             "answer": fallback_msg, 
             "messages": [AIMessage(content=fallback_msg)],
         }
     # [상황 2] 3번 이상 실패 - 검색 결과가 부족함을 알리고 대안을 제안하는 프롬프트
-    elif retry_num >= 1: 
+    elif retry_num >= 2: 
         print("--- 검색 실패. 대안 제안 프롬프트 사용 ---")
         rag_prompt = ChatPromptTemplate.from_messages(
             [
@@ -419,7 +420,8 @@ def generate(state: AgentState):
                     3. 목록 나열 금지: 검색 결과(context)에 있는 상품 정보를 줄글이나 번호 매기기(1, 2, 3...)로 길게 나열하지 마세요. (사용자 화면 하단에 상품 카드가 자동으로 따로 표시됩니다.)
                     4. 간결한 안내: 정확한 상품이 없을 경우, 사용자에게 정중히 양해를 구하고 "대신 아래에 추천해 드리는 비슷한 상품들을 확인해 보세요!"라는 뉘앙스로 1~2문장 이내의 짧고 친절한 인사말만 작성하세요.
                     5. 불필요한 사족(예: '제가 제공한 검색 결과 중에는~')은 모두 빼고 자연스럽게 대화하듯 말하세요.
-                    6. 문장을 최대한 자연스럽게 만들어 주세요 (예: 이바지를 어울리는 스타일 신발 찾으시는군요! X -> 이 바지와 어울리는 스타일 신발 찾으시는군요!)
+                    6. 문장을 최대한 자연스럽게 만들어 주세요
+                    7. 상품 설명 및 description에 질문한 상품이 없으면 찾는 상품 없다고 말하세요
                     """
                 ),
                 (

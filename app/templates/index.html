@@ -602,7 +602,7 @@
                 loadingBubble.querySelector('#results').innerHTML = data.results.map(r => `
                 <div class="card">
                     <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
-                    <div class="title">${escapeHtml(r.title || r.product_id || '')}</div>
+                    <div class="title">${escapeHtml(r.product_id || '')}</div>
                     <div class="score">score: ${r.score}</div>
                 </div>
             `).join('');

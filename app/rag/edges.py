@@ -119,13 +119,6 @@ def check_hallucinations(state):
 
     grade = score.binary_score
 
-    # 검색 결과가 없어서 안내 멘트가 나간 경우 프리패스
-    if "검색 결과가 없" in context or "없습니다" in answer:
-        print("---DECISION: 검색 결과 없음 안내이므로 할루시네이션 검사 생략---")
-        print(f"context: {context} \n")
-        print(f"generation: {answer}")
-        return "support"
-
     if retry_num >= 5 or "찾지 못했습니다" in answer:
         print("---DECISION: 고정 안내 멘트이므로 할루시네이션 검사 생략---")
         print(f"context: {context}")
@@ -139,4 +132,5 @@ def check_hallucinations(state):
         return "support"
     else:
         print("---DECISION: 문서에 없는 내용 지어냄(환각). 다시 답변 생성, RE-TRY---")
+        print(f"환각 generation: {answer}")
         return "not supported"

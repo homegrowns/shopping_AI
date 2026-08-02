@@ -14,7 +14,20 @@ CROP_WEIGHT = 0.6
 ORIGINAL_WEIGHT = 0.4
 
 # 검사하고 싶은 단어들을 리스트로 모아둡니다.
-KEYWORD = ("than", "same", "with", "match", "matching", "in")
+KEYWORD = (
+    "than",
+    "same",
+    "with",
+    "match",
+    "matching",
+    "in",
+    "similar",
+    "color",
+    "suitable",
+    "look good on",
+    "brighter",
+    "darker",
+)
 
 CATEGORIES = (
     "jeans",
@@ -36,7 +49,7 @@ def get_text_vector(msg: str, embedder):
     메시지에서 " that" 앞부분만 추출하여 소문자로 바꾼 뒤 벡터화하는 함수.
     " that" 키워드가 없으면 전체 메시지를 소문자로 변환하여 벡터화합니다.
     """
-    index = msg.find(" that")
+    index = msg.find(" that") or msg.find(" matching")
     
     if index != -1:
         result = msg[:index].lower()
@@ -123,7 +136,8 @@ def build_query_vector(
     else:
         print("이미지가 없습니다.")
     
-
+    # TODO: 2026-08-03
+    # crop_applied 대신 이미지백터 bool로 [QDRANT SEARCH]툴 100%쓰도록 한다
     image_vector, crop_applied = get_image_vector(original_image, box, contents, embedder)
 
     # 이미지 벡터와 텍스트 벡터가 모두 존재하는 경우
