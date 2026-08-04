@@ -31,7 +31,7 @@ elif os.getenv("ENV") == "dev":
 
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "products_images")
 TOP_K = int(os.getenv("TOP_K"))
-SCORE = float(os.getenv("SCORE", 0.5))
+SCORE = float(os.getenv("SCORE", 0.4))
 
 llm_with_tools = llm.bind_tools([products_images_search_tool, handle_small_talk])
 
@@ -76,6 +76,7 @@ system_prompt = """
 - 인사
 - 어색한 문장의 질문 (예시: Soccer player loss recommendation)
 - 완성 되지 않은 문장(예시: grey)
+- 상품과 다른주제 대화
 
 ## 답변 규칙
 - 답변은 간결하고 질문에 맞게 작성합니다.
@@ -128,9 +129,9 @@ def route_tools(state: AgentState):
         print("----- [ROUTE small_talk] -----")
         # 핵심 수정: 그래프 이미지에 있는 노드 이름과 똑같이 맞춰줍니다!
         return "small_talk" 
-    else:
-        print("----- [END] -----")
-        return END
+    # else:
+    #     print("----- [END] -----")
+    #     return END
 
 def qdrant_search(state: AgentState):
     """
@@ -420,7 +421,7 @@ def generate(state: AgentState):
                     3. 목록 나열 금지: 검색 결과(context)에 있는 상품 정보를 줄글이나 번호 매기기(1, 2, 3...)로 길게 나열하지 마세요. (사용자 화면 하단에 상품 카드가 자동으로 따로 표시됩니다.)
                     4. 간결한 안내: 정확한 상품이 없을 경우, 사용자에게 정중히 양해를 구하고 "대신 아래에 추천해 드리는 비슷한 상품들을 확인해 보세요!"라는 뉘앙스로 1~2문장 이내의 짧고 친절한 인사말만 작성하세요.
                     5. 불필요한 사족(예: '제가 제공한 검색 결과 중에는~')은 모두 빼고 자연스럽게 대화하듯 말하세요.
-                    6. 문장을 최대한 자연스럽게 만들어 주세요
+                    6. "유사도가 높은 두 개의 상품" 대신 "유사한 상품을 찾았어요"라는 말로 대체 "유사도"라는말 금지 
                     7. 상품 설명 및 description에 질문한 상품이 없으면 찾는 상품 없다고 말하세요
                     """
                 ),

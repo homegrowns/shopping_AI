@@ -7,6 +7,7 @@ from app.image_embedding_similarity.embedder import ClipEmbedder
 from app.image_embedding_similarity.crop_utils import get_crop_hint_box, crop_with_padding
 
 from deep_translator import GoogleTranslator
+from sentence_transformers import SentenceTransformer
 
 # 크롭 이미지와 원본 이미지를 함께 임베딩할 때의 가중치
 # (크롭만 쓰면 장식 디테일에 과도하게 집중되는 문제가 있어 원본 맥락을 일부 반영)
@@ -27,22 +28,61 @@ KEYWORD = (
     "look good on",
     "brighter",
     "darker",
+    "fit",
 )
 
-CATEGORIES = (
-    "jeans",
-    "pants",
-    "hoodie",
-    "shirt",
-    "t-shirt",
-    "hat",
-    "cap",
-    "shoes",
-    "sneakers",
-    "bag",
-    "jacket",
-    "coat",
-)
+CATEGORY_ALIASES = {
+    # 원피스
+    "one piece": "dress",
+    "onepiece": "dress",
+    "one-piece": "dress",
+
+    # 티셔츠
+    "tee": "t-shirt",
+    "tea": "t-shirt",
+
+    # 맨투맨
+    "mtm": "sweatshirt",
+    "sweat shirt": "sweatshirt",
+
+    # 후드티
+    "hooded sweatshirt": "hoodie",
+    "hooded": "hoodie",
+
+    # 청바지
+    "denim": "jeans",
+    "denim pants": "jeans",
+    
+
+    # 슬랙스
+    "slacks": "pants",
+    "trousers": "pants",
+
+    # 운동화
+    "trainers": "sneakers",
+    "trainer": "sneakers",
+    "running shoes": "sneakers",
+
+    # 점퍼
+    "jumper": "jacket",   # 한국에서 말하는 점퍼 기준
+
+    # 패딩
+    "puffer": "padding",
+    "puffer jacket": "padding",
+    "down jacket": "padding",
+
+    # 니트
+    "knitwear": "knit",
+    "sweater": "knit",
+
+    # 와이셔츠
+    "dress shirt": "shirt",
+
+    # 백팩
+    "back pack": "backpack",
+}
+
+model = SentenceTransformer("clip-ViT-B-32", device="cuda")
 
 def get_text_vector(msg: str, embedder):
     """
@@ -51,12 +91,16 @@ def get_text_vector(msg: str, embedder):
     """
     index = msg.find(" that") or msg.find(" matching")
     
+    if any(category in msg for category in CATEGORY_ALIASES):
+        for alias, category in CATEGORY_ALIASES.items():
+            msg = msg.replace(alias, category)
+            
     if index != -1:
         result = msg[:index].lower()
-        print(f"추출된 텍스트: {result}")
+        print(f"that 키워드가 있습니다. 추출된 텍스트: {result}\n")
         return embedder.embed_text(result)
     else:
-        print("that 키워드가 없습니다. 전체 질문을 벡터화 합니다.\n")
+        print(f"that 키워드가 없습니다. 전체 질문을 벡터화 합니다. : {msg}\n")
         return embedder.embed_text(msg.lower())
 
 def get_image_vector(
@@ -123,8 +167,7 @@ def build_query_vector(
         msg = GoogleTranslator(source='ko', target='en').translate(message)
         msg =  msg.lower()
         print(f"[google 번역] {message} -> {msg} \n") # 디버그용 출력 
-        text_vector = get_text_vector(msg, embedder)    
-
+        text_vector = get_text_vector(msg, embedder)   
 
     if contents is not None:
         original_image = Image.open(io.BytesIO(contents)).convert("RGB")
@@ -142,26 +185,34 @@ def build_query_vector(
 
     # 이미지 벡터와 텍스트 벡터가 모두 존재하는 경우
     if image_vector and text_vector:
-
-# TODO: visoin label text 를 나중에 주입하여 text_vector 유사도 검사에 도움주는 기능
-#      1. 이미지와 텍스트질문이 찾는 카테고리가 같으면 이미지를 벡터화후 query_vector에 활용
-#      2. 찾는 카테고리가 다르면 이미지의 label text에서 카테고리와 text 조합후 벡터화
-        print("텍스트 벡터를 사용해서 검색합니다.\n") 
-        query_vector = text_vector
-
-        # 리스트 안의 단어 중 하나라도(any) msg 안에 들어있는지 확인합니다.
-        if any(k in msg for k in KEYWORD): #예} 이 바지 보다 밝은
-            print("텍스트(80%)와 이미지(20%)의 가중합으로 멀티모달 쿼리 벡터 생성.\n\n") 
+        print("텍스트(90%)와 이미지(10%)의 가중합으로 멀티모달 쿼리 벡터 생성.\n\n") 
             
-            # 이미지 벡터에 0.2, 텍스트 벡터에 0.8을 곱해서 더해줍니다.
-            combined = (0.2 * np.array(image_vector)) + (0.8 * np.array(text_vector))
+        # 이미지 벡터에 0.4, 텍스트 벡터에 0.6을 곱해서 더해줍니다.
+        combined = (0.1 * np.array(image_vector)) + (0.9 * np.array(text_vector))
+        
+        # L2 정규화 (길이를 1로 맞춰서 코사인 유사도 검색에 최적화)
+        combined = combined / np.linalg.norm(combined)
+        query_vector = combined.tolist()
+
+# # TODO: visoin label text 를 나중에 주입하여 text_vector 유사도 검사에 도움주는 기능
+# #      1. 이미지와 텍스트질문이 찾는 카테고리가 같으면 이미지를 벡터화후 query_vector에 활용
+# #      2. 찾는 카테고리가 다르면 이미지의 label text에서 카테고리와 text 조합후 벡터화
+        # print("텍스트 벡터를 사용해서 검색합니다.\n") 
+        # query_vector = text_vector
+
+        # # 리스트 안의 단어 중 하나라도(any) msg 안에 들어있는지 확인합니다.
+        # if any(k in msg for k in KEYWORD): #예} 이 바지 보다 밝은
+        #     print("텍스트(90%)와 이미지(10%)의 가중합으로 멀티모달 쿼리 벡터 생성.\n\n") 
             
-            # L2 정규화 (길이를 1로 맞춰서 코사인 유사도 검색에 최적화)
-            combined = combined / np.linalg.norm(combined)
-            query_vector = combined.tolist()
+        #     # 이미지 벡터에 0.2, 텍스트 벡터에 0.8을 곱해서 더해줍니다.
+        #     combined = (0.1 * np.array(image_vector)) + (0.9 * np.array(text_vector))
+            
+        #     # L2 정규화 (길이를 1로 맞춰서 코사인 유사도 검색에 최적화)
+        #     combined = combined / np.linalg.norm(combined)
+        #     query_vector = combined.tolist()
     else:
         # 둘 중 하나만 존재하면 그것을 쿼리 벡터로 사용
         query_vector = image_vector or text_vector
-
+    
     # 최종 쿼리 벡터와 크롭 적용 여부를 반환
     return query_vector, crop_applied

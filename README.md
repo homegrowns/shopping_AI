@@ -7,8 +7,6 @@ TODO :
    1. eng_text 제거하기 v
    2. sql_tool 붙이기
    3. 벡터DB 데이터 추가하기 v
-    : 2026-08-03
-   4. crop_applied 대신 이미지백터 bool로 [QDRANT SEARCH]툴 100%쓰도록 한다
 ```
 
 ```python

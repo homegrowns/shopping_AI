@@ -15,15 +15,15 @@ from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 from PIL import Image
+import aioboto3
+from contextlib import asynccontextmanager
 
 from app.rag.agent import start_agent
 from app.image_embedding_similarity.embedder import ClipEmbedder
 from app.image_embedding_similarity.crop_utils import crop_with_padding, get_crop_hint_box
 from app.image_embedding_similarity.qdrant_utils import ensure_collection, get_client, search_similar
 from app.service.search_service import build_query_vector
-
-import aioboto3
-from contextlib import asynccontextmanager
+from app.image_embedding_similarity.label_utils import get_image_labels
 
 BASE_DIR = Path(__file__).resolve().parent
 print(BASE_DIR)
@@ -87,11 +87,24 @@ async def search(
     elif not message:
         print("메세지가 없습니다.")
 
+    image_labels: list[str] = []
+    if contents is not None:
+        try:
+            image_labels = get_image_labels(contents)
+        except Exception as e:
+            if "credentials" in str(e).lower() or "valid type" in str(e).lower():
+                print(f"[Label Detection] Google 인증 파일 문제로 실패, 라벨 없이 진행: {e}")
+            else:
+                print(f"[Label Detection] 실패, 라벨 없이 진행: {e}")
 
     # ── 비즈니스 로직 ──
     query_vector, crop_applied = build_query_vector(contents, message, embedder)
+
     # RAG 파이프시작
-    final_state = start_agent(message, query_vector)
+    if message is not None:
+        final_state = start_agent(message+"\n[이미지 속 카테고리]="+", ".join(image_labels) , query_vector)
+    else:
+        final_state = start_agent("[이미지 속 카테고리]="+", ".join(image_labels) , query_vector)
 
     structured_results = final_state.get("search_results")
     answer_text = final_state.get("answer", "")
