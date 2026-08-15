@@ -17,6 +17,7 @@ from app.image_embedding_similarity.crop_utils import crop_with_padding, get_cro
 from app.image_embedding_similarity.qdrant_utils import ensure_collection, get_client, search_similar
 from app.service.search_service import build_query_vector
 from app.image_embedding_similarity.label_utils import get_image_labels
+from app.result_item_class import SearchResultItem, SearchResponse
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -64,7 +65,8 @@ async def search(request: Request, s: str | None = None):
 def health():
     return {"status": "ok"}
 
-@app.post("/search")
+@app.post("/search",
+response_model=SearchResponse)
 async def search(
     request: Request,
     session_id: str = Form(...),
@@ -107,40 +109,15 @@ async def search(
     else:
         final_state = start_agent(label_text="[이미지 속 카테고리]="+", ".join(image_labels[:5]), query_vector=query_vector, is_image_collection=is_image_collection)
 
+
     structured_results = final_state.get("search_results")
     answer_text = final_state.get("answer", "")
 
     print(f"\n final_state: {structured_results}")
     print(f"\n answer_text: {answer_text}")
 
-    ##!! stg 환경(Gemini)은 내부적으로 answer 값을 LangChain의 AIMessage 객체로 감싸서 돌려줄 수 있습니다. 
-    # 이 객체는 겉보기에는 문자열처럼 print()도 잘 되고 로그에도 예쁘게 찍히지만, json.dumps()가 "이건 문자열이 아니라 
-    # 복잡한 파이썬 객체잖아! 나는 이걸 JSON으로 못 바꿔!" 하며 500 에러를 뱉는 원인입니다.
-
-    #dev 환경(ChatOllama)으로 테스트하셨다면, Ollama는 answer 값을 **순수한 파이썬 문자열(str)**로 깔끔하게 돌려줍니다. 
-    # json.dumps()가 아무런 문제 없이 통과
-
-    # ── 안전한 JSON 변환 처리 (500 에러 방지) ──
-    # answer_text가 LangChain AIMessage 객체일 수 있으므로 문자열로 변환
-    if hasattr(answer_text, 'content'):
-        answer_text = answer_text.content
-    answer_text = str(answer_text) if answer_text else ""
-
-    # structured_results 안의 값들을 JSON 직렬화 가능한 타입으로 변환
-    safe_results = []
-    if structured_results:
-        for item in structured_results:
-            safe_item = {}
-            for k, v in item.items():
-                if hasattr(v, 'item'):      # numpy int64, float64 등
-                    safe_item[k] = v.item()
-                elif hasattr(v, 'content'):  # LangChain 객체
-                    safe_item[k] = v.content
-                else:
-                    safe_item[k] = v
-            safe_results.append(safe_item)
-
-    return JSONResponse(content={
-        "results": safe_results,
+    # Pydantic이 알아서 검증하고 변환해 줍니다 (JSONResponse 안 써도 됨)
+    return {
+        "results": structured_results,
         "answer": answer_text
-    })
+    }
