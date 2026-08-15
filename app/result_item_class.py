@@ -15,7 +15,6 @@ class SearchResultItem(BaseModel):
     image_url: Any = None
     score: Any = None
 
-    # ── [Score 변환기] ──
     # Qdrant 검색 결과로 넘어오는 score 값은 일반 Python float가 아니라
     # Numpy 객체인 numpy.float64 타입일 수 있습니다. (이 경우 FastAPI가 JSON으로 못 바꿔서 500 에러 발생)
     # mode='before' 옵션: Pydantic이 엄격한 타입 검증을 시작하기 '전'에 이 함수를 먼저 가로채어 실행하겠다는 의미입니다.
@@ -34,7 +33,7 @@ class SearchResponse(BaseModel):
     results: List[SearchResultItem]  # 여러 개의 상품 검색 결과 리스트
     answer: str                      # LLM이 생성한 안내 메시지 텍스트
 
-    # ── [Answer 변환기] ──
+
     # 환경(Gemini 등)에 따라 LangChain의 응답이 단순 문자열이 아니라
     # AIMessage(content="안녕하세요...", ...) 같은 복잡한 객체 형태로 넘어올 때가 있습니다.
     @field_validator('answer', mode='before')
