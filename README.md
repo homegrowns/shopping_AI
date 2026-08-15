@@ -137,7 +137,7 @@ S3_BUCKET="버킷_이름_입력"
 
 # 검색 튜닝 옵션
 TOP_K=8            # 가져올 최대 검색 결과 수
-SCORE=0.3          # 최소 유사도 점수 임계값
+SCORE=0.6          # 최소 유사도 점수 임계값
 
 # 실행 환경 (prod / stg / dev)
 ENV="dev"
@@ -150,7 +150,7 @@ ENV="dev"
 uv sync
 
 # 개발 서버 실행
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uv run sever.py
 ```
 
 ### 3. Docker 실행
@@ -169,7 +169,7 @@ docker run -d -p 8000:8000 --env-file .env shopping-assistant
 |--------|----------|------|
 | `dev` | Ollama (Llama 3.1) | 로컬 개발 / 무료 |
 | `stg` | Google Gemini 2.5 Flash | 스테이징 테스트 |
-| `prod` | AWS Bedrock (Claude 3.5 Sonnet) | 운영 배포 |
+| `prod`| Google Gemini 2.5 Flash or AWS Bedrock (Claude 3.5 Sonnet) | 운영 배포 |
 
 ---
 
