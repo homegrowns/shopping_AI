@@ -8,9 +8,11 @@ class AgentState(MessagesState):
     answer: str
     retry_num: int
     query_vector: List[float] = None      
-    search_results: List[Any] 
+    search_results: List[Any]
+    is_image_collection: bool = True
 
 # 2. 처음에 graph.invoke()로 입력받을 데이터의 상태(State)
 class InputState(MessagesState):
     question: Optional[str] = None
     query_vector: List[float] = None
+    is_image_collection: bool = True

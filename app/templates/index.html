@@ -3,7 +3,9 @@
 
 <head>
     <meta charset="UTF-8" />
-    <title>이미지+텍스트 유사도 검색</title>
+    <title>Shopping AI Assistant</title>
+    <link rel="icon" type="image/jpeg" href="./shopping_agent_icon.jpg">
+
 
     <!-- ============================================================
          [스타일 시트]
@@ -251,6 +253,36 @@
             height: 32px;
             overflow: hidden;
         }
+
+        .card .link {
+            font-size: 6px;
+            color: #444;
+            margin-top: 3px;
+        }
+
+        .card .mall_name {
+            font-size: 12px;
+            color: #4a7dff;
+            margin-top: 6px;
+        }
+
+        .card .brand {
+            font-size: 12px;
+            color: #4a7dff;
+            margin-top: 6px;
+        }
+
+        .card .lprice {
+            font-size: 11px;
+            color: #4a7dff;
+            margin-top: 3px;
+        }
+
+        .card .hprice {
+            font-size: 11px;
+            color: #4a7dff;
+            margin-top: 7px;
+        }
     </style>
 </head>
 
@@ -258,7 +290,7 @@
     <!-- ============================================================
          [페이지 제목]
     ============================================================ -->
-    <h1>이미지+텍스트로 유사 상품 검색</h1>
+    <h1>Shopping AI Assistant</h1>
 
     <!-- ============================================================
          [채팅 로그 영역]
@@ -601,9 +633,12 @@
                 loadingBubble.querySelector('.status-line').textContent = statusText;
                 loadingBubble.querySelector('#results').innerHTML = data.results.map(r => `
                 <div class="card">
+                    <div class="link">${escapeHtml(r.link || '')}</div>
                     <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
-                    <div class="title">${escapeHtml(r.product_id || '')}</div>
-                    <div class="score">score: ${r.score}</div>
+                    <div class="title">${escapeHtml(r.title || '')}</div>
+                    <div class="hprice">최고가: ${escapeHtml(r.hprice || '??')}</div>
+                    <div class="lprice">최저가: ${escapeHtml(r.lprice || '??')}</div>
+                    <div class="mall_name">판매처: ${r.mall_name || ''}</div>
                 </div>
             `).join('');
 

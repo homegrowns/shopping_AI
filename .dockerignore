@@ -1,0 +1,25 @@
+# Virtual environments
+.venv
+.git
+__pycache__
+*.py[oc]
+*.egg-info
+
+# Secrets & env (mount at runtime, never bake into image)
+
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Build artifacts
+build/
+dist/
+wheels/
+
+# Data files
+chroma_db/
+dataset/

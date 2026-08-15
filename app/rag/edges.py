@@ -8,14 +8,19 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 if os.getenv("ENV") == "prod":
-    from langchain_aws import ChatBedrock
-    llm = ChatBedrock(model_id="anthropic.claude-3-5-sonnet...")
-    print("(edges.py) LLM: ", "prod")
+    from langchain_aws import ChatBedrockConverse  # Converse API 기반 클래스 사용
+    print("(nodes.py) LLM: ", "prod anthropic.claude-3-5-sonnet-20240620-v1:0")
 
-elif os.getenv("ENV") == "local":
+    llm = ChatBedrockConverse(
+        model_id="anthropic.claude-3-5-sonnet-20240620-v1:0",  
+        region_name="ap-northeast-2",  # 서울 리전 명시
+        temperature=0.5
+    )
+
+elif os.getenv("ENV") == "stg":
     from langchain_google_genai import ChatGoogleGenerativeAI
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-    print("(edges.py) LLM: ", "local")
+    print("(edges.py) LLM: ", "stg", "gemini-2.5-flash")
 
 elif os.getenv("ENV") == "dev":
     from langchain_ollama import ChatOllama

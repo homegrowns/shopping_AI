@@ -10,11 +10,7 @@ dependencies = [
     "langchain-community>=0.3.0",
     "langchain-text-splitters>=1.0.0",
     "python-dotenv==1.0.1",
-    "openai>=2.5.0",
-    "langchain-tavily>=0.2.12",
     "langgraph-cli[inmem]>=0.3.6",
-    "beautifulsoup4>=4.13.5",
-    "supabase>=2.22.0",
     "docx2txt>=0.9",
     "langchain-mcp-adapters>=0.1.11",
     "google-api-python-client>=2.187.0",
@@ -27,8 +23,6 @@ dependencies = [
     "black",
     "fastapi==0.115.0",
     "jinja2>=3.1.6",
-    "langchain-ollama",
-    "httpx>=0.28.1",
     "pillow==10.4.0",
     "sentence-transformers==3.0.1",
     "qdrant-client==1.10.1",
@@ -38,4 +32,14 @@ dependencies = [
     "langchain-qdrant>=1.0.0",
     "aioboto3>=7.0.0",
     "deep-translator>=1.11.4",
+    "langchain-aws>=1.7.0",
+    "boto3>=1.43.56",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }

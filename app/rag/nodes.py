@@ -1,12 +1,13 @@
 import os
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import ToolMessage, AIMessage, HumanMessage, SystemMessage
-from app.rag.sql_tool  import execute_sql_query, get_table_schema
+from app.rag.sql_tool  import qdrant_to_sql
 from app.rag.qdrant_tool import products_images_search_tool, client, retriever, LangChainClipEmbedder
 from app.rag.communication_tool import handle_small_talk
 from app.rag.state import AgentState
@@ -15,21 +16,27 @@ from langgraph.graph import END
 from deep_translator import GoogleTranslator
 
 if os.getenv("ENV") == "prod":
-    from langchain_aws import ChatBedrock
-    llm = ChatBedrock(model_id="anthropic.claude-3-5-sonnet...")
-    print("(nodes.py) LLM: ", "prod anthropic.claude-3-5-sonnet")
+    from langchain_aws import ChatBedrockConverse  # Converse API 기반 클래스 사용
+    print("(nodes.py) LLM: ", "prod anthropic.claude-3-5-sonnet-20240620-v1:0")
 
-elif os.getenv("ENV") == "local":
+    llm = ChatBedrockConverse(
+        model_id="anthropic.claude-3-5-sonnet-20240620-v1:0",  
+        region_name="ap-northeast-2",  # 서울 리전 명시
+        temperature=0.5
+    )
+
+elif os.getenv("ENV") == "stg":
     from langchain_google_genai import ChatGoogleGenerativeAI
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-    print("(nodes.py) LLM: ", "local gemini-2.5-flash")
+    print("(nodes.py) LLM: ", "stg gemini-2.5-flash")
 
 elif os.getenv("ENV") == "dev":
     from langchain_ollama import ChatOllama
     llm = ChatOllama(model="llama3.1")
     print("(nodes.py)LLM: ", "dev llama3.1")
 
-COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "products_images")
+COLLECTION_NAME_IMG = os.getenv("QDRANT_COLLECTION_IMG", "products_images")
+COLLECTION_NAME_DESC = os.getenv("QDRANT_COLLECTION_DESC", "products_description")
 TOP_K = int(os.getenv("TOP_K"))
 SCORE = float(os.getenv("SCORE", 0.4))
 
@@ -51,11 +58,11 @@ system_prompt = """
 
 ### products_images_search
 다음 경우 반드시 호출하세요.
-- 상품 추천 요청
+- 상품 추천
 - 상품 이름 (예시: 야구모자)
 - 비슷한 상품 찾기
 - 코디 추천
-- 이미지 기반 상품 추천
+- 이미지 기반 상품 추천 (메세지: 이미지와 유사한 상품을 찾아)
 - 특정 상품을 찾는 요청
 - 관련 상품 카테고리 질문 안내
 
@@ -69,19 +76,18 @@ system_prompt = """
 - 쇼핑과 관계없는 질문
 - 상품의 총 개수
 - 민감한 기술 질문
-- 상품의 종류가 명시 되지않은 경우
 
 ## 일반 대화(handle_small_talk)
 다음 경우 반드시 호출하세요
 - 인사
 - 어색한 문장의 질문 (예시: Soccer player loss recommendation)
-- 완성 되지 않은 문장(예시: grey)
 - 상품과 다른주제 대화
 
 ## 답변 규칙
 - 답변은 간결하고 질문에 맞게 작성합니다.
 - 이 이미지와 유사한 상품을 찾아주세요. 라는 인풋메세지가 있으면 "올리신 사진"과 "유사한 상품"이라고 언급하세요
-- description을 잘보고 추천이유를 고객이 이해하기 쉽게 잘 설명합니다.
+- description 및 제품 설명을 잘보고 추천이유를 고객에게 잘 설명합니다.
+- 검색 결과가 요청 상품과 종류가 다르면 굳이 결과를 안보여줘도 됩니다.
 - 검색 결과에 없는 정보는 추측하지 않습니다. (예시: 회색 상품이 있습니다.)
 - 이전 질문과 연관지어서 답변하지마세요.
 - 상품의 총 개수 같은 질문은 모른다고 하세요
@@ -137,14 +143,22 @@ def qdrant_search(state: AgentState):
     """
     현재 질문 또는 멀티모달 벡터를 기반으로 상품 정보(문서)를 검색합니다.
     """
-    print("----- [QDRANT SEARCH] -----")
+    print("----- [QDRANT + SQLLITE SEARCH] -----")
     
     query_vector = state.get("query_vector")
+    is_image_collection = state.get("is_image_collection")
+    print("is_image_collection", is_image_collection)
+    if is_image_collection:
+        collection_name = COLLECTION_NAME_IMG
+        print(f"----- [QDRANT SEARCH] : IMAGE COLLECTION ----- {collection_name}")
+    else:
+        collection_name = COLLECTION_NAME_DESC
+        print(f"----- [QDRANT SEARCH] : TEXT COLLECTION ----- {collection_name}")
         
     # [1] 벡터 검색
     if query_vector:
         results = client.query_points(
-            collection_name=COLLECTION_NAME,
+            collection_name=COLLECTION_NAME_IMG,
             query=query_vector,
             limit=TOP_K,
             with_payload=True,
@@ -159,7 +173,6 @@ def qdrant_search(state: AgentState):
             payload = point.payload or {}
 
             product_id = payload.get("product_id")
-            # title = payload.get("title")
             description = payload.get("description")
             image_url = payload.get("image_url")
             score = point.score
@@ -173,19 +186,26 @@ def qdrant_search(state: AgentState):
                 
             seen_ids.add(product_id)
             # 중복 검사 로직 끝
-
-            context += f"[{product_id}번 상품] (유사도: {round(score, 4)})\n"
-            # context += f"- 상품명: {title}\n"
-            context += f"- 상품 설명: {description}\n"
-            context += f"- 상품 이미지: {image_url}\n"
-
+            
             structured_results.append({
                 "score": round(score, 4),
                 "product_id": product_id,
                 "description": description,
-                # "title": title,
                 "image_url": image_url,
             })
+
+            context += f"[{product_id}번 상품] (유사도: {round(score, 4)})\n"
+            context += f"- 상품 설명: {description}\n"
+
+    if structured_results:
+        # print("qdrant조회 결과 O")       
+        db_results = qdrant_to_sql(structured_results)
+        if db_results:
+            structured_results = db_results
+            print(f"- DB조회 결과: {structured_results}") 
+            context += f"- DB조회 결과: {structured_results}\n"
+        else:
+            print("DB조회 실패")
 
     # Tool 호출에 대한 응답 메시지(검색 결과) 생성
     last_message = state["messages"][-1]
@@ -245,66 +265,137 @@ def small_talk(state: AgentState):
             "search_results": []
         }
 
-def sql_query_generate(state: AgentState):
-    """
-    현재 질문을 기반으로 관련 sqllite를 검색합니다.
-    """
-    print("----- [SQL QUERY GENERATE] -----")
-    # Tool 호출에 대한 응답 메시지(검색 결과) 생성
-    last_message = state["messages"][-1]
 
-    if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
-        return {"messages": [AIMessage(content="SQL 호출 정보 없음")]}
-    
-    tool_call = last_message.tool_calls[0]
-    tool_name = tool_call["name"]
-    tool_args = tool_call["args"]
+# def context_organizer(state: AgentState):
+#     """
+#     검색된 결과를 정리합니다.
+#     """
+#     print("----- [CONTEXT ORGANIZER] -----")
+#     context = state["context"]
 
-    # 도구 실행
-    if tool_name == "execute_sql_query":
-        context = execute_sql_query.invoke(tool_args)
-    elif tool_name == "get_table_schema":
-        context = get_table_schema.invoke(tool_args)
-    
-    tool_message = ToolMessage(
-        content=str(context),
-        name=tool_name,
-        tool_call_id=tool_call["id"]
-    )
-    return {"messages": [tool_message], "context": str(context)}
+#     context_organizer_prompt = ChatPromptTemplate.from_messages(
+#         [
+#             (   "system",
+#                 """당신은 검색증강생성(RAG)을 위한 검색 및 쿼리 결과를 정리하는 전문가입니다.
+#                 아래의 검색된 결과를 확인하고, LLM이 해당 문서를 정리된 형태로 참고할 수 있도록
+#                 문서의 불필요한 공백 등을 삭제하거나 정렬을 다시하여 정리된 형태로 반환해주세요.
+#                 내용을 추가하거나 삭제하지 마세요. 페이지 번호 정보를 절대 삭제하지 마세요.
+#                 [중요사항!] context에 임의로 수정사항을 추가하지말고, 있는 그대로 전달해주세요.
+#                 """
+#             ),
+#             (
+#                 "user",
+#                 """
+#                 검색 결과: {context}
+#                 """,
+#             ),
+#         ]
+#     )
+
+#     context_organizer = context_organizer_prompt | llm
+#     organized_context = context_organizer.invoke({"context": context})
+
+#     return {"context": organized_context.content, "messages": [AIMessage(organized_context.content)]}
+
+### 해결: LLM 의존 제거, 코드 기반 필터링으로 변경
+
+import re
 
 def context_organizer(state: AgentState):
     """
-    검색된 결과를 정리합니다.
+    검색된 결과를 정리하고, 사용자 요청과 무관한 결과를 필터링합니다.
     """
     print("----- [CONTEXT ORGANIZER] -----")
     context = state["context"]
+    search_results = state.get("search_results", [])
 
-    context_organizer_prompt = ChatPromptTemplate.from_messages(
+    # 사용자의 원래 메시지 추출
+    user_message = ""
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, HumanMessage):
+            user_message = msg.content
+            break
+
+    # ========================================
+    # [1단계] LLM에게 관련 있는 상품 ID 판단 요청 (출력 단순화)
+    # ========================================
+    filter_prompt = ChatPromptTemplate.from_messages(
         [
             (   "system",
-                """당신은 검색증강생성(RAG)을 위한 검색문서 및 쿼리 결과를 정리하는 전문가입니다.
-                아래의 검색된 결과를 확인하고, LLM이 해당 문서를 정리된 형태로 참고할 수 있도록
-                문서의 불필요한 공백 등을 삭제하거나 정렬을 다시하여 정리된 형태로 반환해주세요.
-                내용을 추가하거나 삭제하지 마세요. 페이지 번호 정보를 절대 삭제하지 마세요.
-                [중요사항!] context에 임의로 수정사항을 추가하지말고, 있는 그대로 전달해주세요.
+                """당신은 상품 검색 결과의 연관성을 판단하는 전문가입니다.
+                사용자의 요청과 검색된 상품들을 비교하여, **관련 있는 상품의 ID(숫자)만** 쉼표로 구분해서 반환하세요.
+                - 명백히 다른 카테고리(예: 마스크팩을 찾는데 가방이 나온 경우)는 무조건 제외하세요.
+                - 관련 있는 상품이 없으면 '없음' 이라고만 적으세요.
+                - JSON 형식이나 부연 설명은 절대 쓰지 마세요. 오직 숫자와 쉼표만 적으세요.
+                
+                예시 출력 1: 326, 384
+                예시 출력 2: 없음
                 """
             ),
             (
                 "user",
                 """
-                검색 결과: {context}
+                사용자 요청: {user_message}
+                검색된 상품 목록: {search_results}
                 """,
             ),
         ]
     )
 
-    context_organizer = context_organizer_prompt | llm
-    organized_context = context_organizer.invoke({"context": context})
+    filter_chain = filter_prompt | llm
+    
+    # 디버깅을 위해 입력 데이터 정리 (전체 데이터를 다 주면 토큰이 낭비되므로 핵심만 전달)
+    # simplified_results = [
+    #     {"id": item["id"], "title": item["title"], "category": item.get("category1", "") + " " + item.get("category3", "") + " " + item.get("category4", "")} 
+    #     for item in search_results
+    # ]
+    simplified_results = [
+        {"id": item["id"], "title": item["title"], "category": item.get("category3", "")} 
+        for item in search_results
+    ]
+    print(f"\n-----User_message:{user_message}------")
+    print(f"\n-----Simplified_results:{simplified_results}------")
+    filter_response = filter_chain.invoke({
+        "user_message": user_message,
+        "search_results": simplified_results
+    })
+    
+    response_text = filter_response.content.strip()
+    print(f"- LLM 필터 응답: {response_text}")
 
-    return {"context": organized_context.content, "messages": [AIMessage(organized_context.content)]}
+    # ========================================
+    # [2단계] 정규식으로 안전하게 ID 추출 (JSON 에러 원천 차단)
+    # ========================================
+    if '없음' in response_text or not response_text:
+        relevant_ids_set = set()
+    else:
+        # 응답 텍스트에서 숫자만 모두 추출 (예: "결과는 326, 384입니다" -> [326, 384])
+        relevant_ids_set = set(int(num) for num in re.findall(r'\d+', response_text))
 
+    # ========================================
+    # [3단계] search_results와 context 동시 필터링
+    # ========================================
+    filtered_results = [
+        item for item in search_results
+        if item.get("id") in relevant_ids_set
+    ]
 
+    # context 재구성
+    filtered_context = "검색된 상품 목록은 다음과 같습니다:\n"
+    filtered_context += f"- DB조회 결과: {filtered_results}\n"
+
+    print(f"- 필터링 전: {len(search_results)}건 → 필터링 후: {len(filtered_results)}건")
+    print(f"- 유지된 ID: {relevant_ids_set}")
+    
+    removed_ids = set(item.get('id') for item in search_results) - relevant_ids_set
+    if removed_ids:
+        print(f"- 제거된 ID: {removed_ids}")
+
+    return {
+        "context": filtered_context,
+        "search_results": filtered_results,
+        "messages": [AIMessage(filtered_context)]
+    }
 
 def transform_query(state: AgentState):
     """
@@ -415,14 +506,17 @@ def generate(state: AgentState):
                     "system",
                     """당신은 센스 있고 친절한 쇼핑몰 어시스턴트입니다. 
                     
-                    [절대 지켜야 할 답변 규칙]
+                    [절대 지켜야 할 답변 규칙]  !!!중요!!!
                     1. 환각 금지: 절대로 가상의 상품명, 가격, 색상을 지어내지 마세요.
                     2. 반말금지: 항상 존댓말을 사용하세요.
                     3. 목록 나열 금지: 검색 결과(context)에 있는 상품 정보를 줄글이나 번호 매기기(1, 2, 3...)로 길게 나열하지 마세요. (사용자 화면 하단에 상품 카드가 자동으로 따로 표시됩니다.)
-                    4. 간결한 안내: 정확한 상품이 없을 경우, 사용자에게 정중히 양해를 구하고 "대신 아래에 추천해 드리는 비슷한 상품들을 확인해 보세요!"라는 뉘앙스로 1~2문장 이내의 짧고 친절한 인사말만 작성하세요.
+                    4. 추천 하는 이유를 검색 결과(context)에 맞추어 간략하게 설명해주세요.
                     5. 불필요한 사족(예: '제가 제공한 검색 결과 중에는~')은 모두 빼고 자연스럽게 대화하듯 말하세요.
-                    6. "유사도가 높은 두 개의 상품" 대신 "유사한 상품을 찾았어요"라는 말로 대체 "유사도"라는말 금지 
-                    7. 상품 설명 및 description에 질문한 상품이 없으면 찾는 상품 없다고 말하세요
+                    6. "유사도" 라는말 금지 !!
+                    7. 상품 설명에 질문한 상품이 없으면 찾는 상품 없다고 말하세요
+                    8. 링크는 알려주지마세요
+                    9. 찾는 상품이 없으면 상품 이미지를 첨부하여 다시 질문해 달라고 유도 하세요
+                    10. question에 맞춰서 대답 하세요
                     """
                 ),
                 (
