@@ -169,7 +169,7 @@ docker run -d -p 8000:8000 --env-file .env shopping-assistant
 |--------|----------|------|
 | `dev` | Ollama (Llama 3.1) | 로컬 개발 / 무료 |
 | `stg` | Google Gemini 2.5 Flash | 스테이징 테스트 |
-| `prod` | AWS Bedrock (Claude 3.5 Sonnet) | 운영 배포 |
+| `prod` | AWS Bedrock (Claude 3.5 Sonnet) 고려중 | 운영 배포 |
 
 ---
 
