@@ -234,6 +234,7 @@ if hasattr(answer_text, 'content'):
     answer_text = answer_text.content
 answer_text = str(answer_text) if answer_text else ""
 ```
+**추가**: 클래스 추가 -> refactor: apply Pydantic SearchResponse model to simplify JSON serialization
 
 ### 2. numpy 타입의 JSON 직렬화 오류
 
