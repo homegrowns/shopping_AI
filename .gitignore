@@ -6,13 +6,15 @@ dist/
 wheels/
 *.egg-info
 config.js
+*.bak
+*.ollama
 
 #sqllite
 products.db
-
+chroma_db/
 dataset/
 secrets/
 
 # Virtual environments
 .venv
-.env
+.env*

@@ -8,14 +8,19 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 if os.getenv("ENV") == "prod":
-    from langchain_aws import ChatBedrock
-    llm = ChatBedrock(model_id="anthropic.claude-3-5-sonnet...")
-    print("(edges.py) LLM: ", "prod")
+    from langchain_aws import ChatBedrockConverse  # Converse API 기반 클래스 사용
+    print("(nodes.py) LLM: ", "prod anthropic.claude-3-5-sonnet-20240620-v1:0")
 
-elif os.getenv("ENV") == "local":
+    llm = ChatBedrockConverse(
+        model_id="anthropic.claude-3-5-sonnet-20240620-v1:0",  
+        region_name="ap-northeast-2",  # 서울 리전 명시
+        temperature=0.5
+    )
+
+elif os.getenv("ENV") == "stg":
     from langchain_google_genai import ChatGoogleGenerativeAI
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-    print("(edges.py) LLM: ", "local")
+    print("(edges.py) LLM: ", "stg", "gemini-2.5-flash")
 
 elif os.getenv("ENV") == "dev":
     from langchain_ollama import ChatOllama
@@ -34,7 +39,7 @@ def decide_to_generate(state):
     답변을 생성할지, 아니면 질문을 다시 생성할지 결정합니다.
     """
 
-    print("----- ASSESS GRADED DOCUMENTS -----")
+    print("----- DECIDE NEXT STEP -----")
     if state.get("retry_num", 0) >= 3: # [ 1 ]
         return "generate"
 
@@ -47,7 +52,7 @@ def decide_to_generate(state):
                 """
                 당신은 검색된 문서가 사용자 질문과 관련이 있는지 평가하는 평가자입니다.
                 문서가 사용자 질문과 관련된 키워드나 의미를 포함하고 있다면 관련성이 있다고 평가하세요.
-                엄격한 테스트일 필요는 없습니다. 목표는 잘못된 검색 결과를 필터링하는 것입니다.
+                목표는 잘못된 검색 결과를 필터링하는 것입니다.
                 문서가 질문과 관련이 있는지를 나타내는 'yes' 또는 'no'의 이진 점수를 제공하세요.
                 """
             ),
@@ -97,12 +102,13 @@ def check_hallucinations(state):
     question = state["question"]
     context = state["context"]
     answer = state["answer"]
+    retry_num = state["retry_num"]
 
     structured_llm = llm.with_structured_output(GradeHallucinations)
 
     system = """당신은 LLM이 생성한 답변이 검색된 사실들에 근거하고 있는지 평가하는 평가자입니다.
     'yes' 또는 'no'의 이진 점수를 제공하세요. 'yes'는 답변이 사실들에 근거하고 있음을 의미합니다.
-    상품 관련 질문은 절대 pdf_search를 사용하지 마세요!"""
+    """
     hallucination_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system),
@@ -115,11 +121,21 @@ def check_hallucinations(state):
     score = hallucination_grader.invoke(
         {"question": question, "context": context, "generation": answer}
     )
+
     grade = score.binary_score
+
+    if retry_num >= 5 or "찾지 못했습니다" in answer:
+        print("---DECISION: 고정 안내 멘트이므로 할루시네이션 검사 생략---")
+        print(f"context: {context}")
+        return "support"  # END 노드로 직행
+
     if grade == "yes":
-        print("---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---")
-        print(score.binary_score)
+        print("---DECISION: 문서 내용에 기반하여 안전하게 답변 생성됨 (환각 없음, 통과!)---")
+        print(f"context: {context}")
+        print("==============================")
+        print(f"generation: {answer}")
         return "support"
     else:
-        print("---DECISION: GENERATION IS NOT GROUNDED IN DOCUMENTS, RE-TRY---")
+        print("---DECISION: 문서에 없는 내용 지어냄(환각). 다시 답변 생성, RE-TRY---")
+        print(f"환각 generation: {answer}")
         return "not supported"
