@@ -226,6 +226,12 @@
             border-radius: 8px;
             padding: 8px;
             text-align: center;
+            cursor: pointer;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
 
         /* ─── 카드 내 상품 이미지 ─── 130px 높이, 비율 유지 크롭 */
@@ -255,9 +261,7 @@
         }
 
         .card .link {
-            font-size: 6px;
-            color: #444;
-            margin-top: 3px;
+            display: none;
         }
 
         .card .mall_name {
@@ -632,8 +636,7 @@
 
                 loadingBubble.querySelector('.status-line').textContent = statusText;
                 loadingBubble.querySelector('#results').innerHTML = data.results.map(r => `
-                <div class="card">
-                    <div class="link">${escapeHtml(r.link || '')}</div>
+                <div class="card" onclick="window.open('${escapeHtml(r.link || '')}', '_blank')">
                     <img src="${r.image_url}" onerror="this.style.opacity=0.2" />
                     <div class="title">${escapeHtml(r.title || '')}</div>
                     <div class="hprice">최고가: ${escapeHtml(r.hprice || '??')}</div>
