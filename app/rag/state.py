@@ -1,18 +1,26 @@
-from typing import List, Optional, Any
-from langgraph.graph import MessagesState, StateGraph
+from typing import Any, List, Optional
 
-# 1. 그래프 내부에서 굴러갈 전체 상태(State)
+from langgraph.graph import MessagesState
+
+
+# 그래프 내부에서 사용하는 전체 상태
 class AgentState(MessagesState):
-    question: Optional[str] = None
+    question: Optional[str]
+    label_text: Optional[str]
+
     context: str
     answer: str
     retry_num: int
-    query_vector: List[float] = None      
-    search_results: List[Any]
-    is_image_collection: bool = True
 
-# 2. 처음에 graph.invoke()로 입력받을 데이터의 상태(State)
+    query_vector: Optional[List[float]]
+    search_results: List[Any]
+    is_image_collection: bool
+
+
+# graph.invoke()로 처음 전달하는 입력 상태
 class InputState(MessagesState):
-    question: Optional[str] = None
-    query_vector: List[float] = None
-    is_image_collection: bool = True
+    question: Optional[str]
+    label_text: Optional[str]
+
+    query_vector: Optional[List[float]]
+    is_image_collection: bool

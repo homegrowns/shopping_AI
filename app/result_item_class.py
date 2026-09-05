@@ -30,8 +30,15 @@ class SearchResultItem(BaseModel):
 
 # 2. 최종 API 응답 전체 구조 정의
 class SearchResponse(BaseModel):
-    results: List[SearchResultItem]  # 여러 개의 상품 검색 결과 리스트
+    results: List[SearchResultItem] = Field(default_factory=list)  # 여러 개의 상품 검색 결과 리스트
     answer: str                      # LLM이 생성한 안내 메시지 텍스트
+
+    @field_validator('results', mode='before')
+    @classmethod
+    def parse_results(cls, v):
+        # LangGraph 상태에 search_results가 없거나 None이어도
+        # API 응답 계약은 항상 배열을 유지한다.
+        return v if isinstance(v, list) else []
 
 
     # 환경(Gemini 등)에 따라 LangChain의 응답이 단순 문자열이 아니라

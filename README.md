@@ -33,6 +33,7 @@
 
 | 영역 | 기술 | 선택 이유 |
 |------|------|-----------|
+| **Frontend** | React, Vite | 선언적 채팅 UI + 빠른 개발/production build |
 | **Backend** | FastAPI, Uvicorn | 비동기 처리 + 자동 API 문서 생성 |
 | **LLM** | Claude 3.5 Sonnet (prod) / Gemini 2.5 Flash (stg) / Llama 3.1 (dev) | 환경별 LLM 분리로 비용 최적화 |
 | **Agent Framework** | LangGraph, LangChain | 복잡한 RAG 워크플로우를 그래프 기반으로 제어 |
@@ -53,6 +54,9 @@
 
 ```
 shopping_assistant/
+├── frontend/                            # Vercel에 독립 배포하는 React/Vite 앱
+│   ├── src/                             # UI, API 모듈, 컴포넌트 테스트
+│   └── vercel.json                      # Vercel 빌드 설정
 ├── app/
 │   ├── main.py                          # FastAPI 엔트리포인트
 │   ├── rag/
@@ -71,7 +75,7 @@ shopping_assistant/
 │   │   ├── label_utils.py               # Google Vision 라벨 탐지
 │   │   ├── qdrant_utils.py              # Qdrant 클라이언트 관리
 │   │   └── ocr_utils.py                 # OCR 유틸리티
-│   └── templates/                       # Jinja2 HTML 템플릿
+│   └── templates/                       # 마이그레이션 문서와 파비콘 원본
 ├── Dockerfile                           # 멀티스테이지 빌드
 ├── pyproject.toml                       # 의존성 관리 (uv)
 ├── requirements.txt                     # pip 의존성
@@ -109,6 +113,7 @@ graph TD
 ### 사전 요구사항
 
 - Python 3.12
+- Node.js 22 이상
 - Qdrant 서버 (로컬 또는 클라우드)
 - Google Cloud 자격 증명 (Vision API 사용 시)
 
@@ -143,14 +148,43 @@ SCORE=0.3          # 최소 유사도 점수 임계값
 ENV="dev"
 ```
 
-### 2. 로컬 실행 (uv 기반)
+### 2. 로컬 실행 (독립 React + FastAPI)
 
 ```bash
-# 의존성 설치
+# 백엔드 의존성 설치와 실행 (터미널 1)
 uv sync
-
-# 개발 서버 실행
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 프론트엔드 의존성 설치와 개발 서버 실행 (터미널 2)
+cd frontend
+npm ci
+npm run dev
+```
+
+Vite 개발 서버는 `/search`를 `http://127.0.0.1:8000`으로 프록시합니다.
+두 서비스는 production에서 완전히 분리됩니다. Vercel 프로젝트의 Root
+Directory를 `frontend`로 지정하고 다음 환경 변수를 설정합니다.
+
+```bash
+VITE_SEARCH_API_BASE_URL=https://your-fastapi-api.example.com
+VITE_API_BASE_URL=https://70crv2wl9a.execute-api.ap-northeast-2.amazonaws.com/dev
+```
+
+FastAPI는 React 정적 파일을 제공하지 않습니다. 기본 Vercel origin
+`https://shopping-assistant-agent-front.vercel.app`은 CORS에 허용되어 있으며,
+추가 preview/custom domain은 백엔드의 쉼표 구분 환경 변수로 설정합니다.
+
+```bash
+FRONTEND_ORIGINS=https://shopping-assistant-agent-front.vercel.app,https://preview.example.com
+```
+
+프론트엔드 검증 명령은 다음과 같습니다.
+
+```bash
+cd frontend
+npm run lint
+npm test
+npm run build
 ```
 
 ### 3. Docker 실행

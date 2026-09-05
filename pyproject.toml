@@ -31,9 +31,12 @@ dependencies = [
     "google-cloud-vision==3.7.4",
     "langchain-qdrant>=1.0.0",
     "aioboto3>=7.0.0",
-    "deep-translator>=1.11.4",
     "langchain-aws>=1.7.0",
     "boto3>=1.43.56",
+    "tavily>=1.1.0",
+    "deep-translator>=1.11.4",
+    "firecrawl>=4.40.0",
+    "google-cloud-translate>=3.27.0",
 ]
 
 [[tool.uv.index]]

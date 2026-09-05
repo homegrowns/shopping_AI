@@ -3,6 +3,9 @@ __pycache__/
 *.py[oc]
 build/
 dist/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
 wheels/
 *.egg-info
 config.js
@@ -18,3 +21,4 @@ secrets/
 # Virtual environments
 .venv
 .env*
+!frontend/.env.example
