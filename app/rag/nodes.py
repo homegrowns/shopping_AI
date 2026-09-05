@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END
+from langgraph.config import get_stream_writer
 
 from app.rag.communication_tool import handle_small_talk
 from app.rag.qdrant_tool import (
@@ -237,6 +238,14 @@ def chatbot(state: AgentState):
     검색(QDRANT SEARCH) 도구를 바인딩 한 LLM 모델에 현재 메시지 상태를 입력하여 응답을 생성합니다.
     질문이 주어지면 검색 도구를 도구호출 하거나 일반 답변하며 종료할지 결정할 수 있습니다.
     """
+    writer = get_stream_writer()
+
+    # 실제 LLM 처리를 시작하기 전에 바로 프론트로 보냄
+    writer({
+        "type": "status",
+        "status": "🤖 질문 분석 중..."
+    })
+
     label_text = (state.get("label_text") or "").strip()
     has_image = (
         state.get("is_image_collection", False)
@@ -343,6 +352,13 @@ def qdrant_search(state: AgentState):
     """
     현재 질문 또는 멀티모달 벡터를 기반으로 상품 정보(문서)를 검색합니다.
     """
+    writer = get_stream_writer()
+
+    writer({
+        "type": "status",
+        "status": "상품 검색 중..."
+    })
+
     print("----- [QDRANT + SQLLITE SEARCH] -----")
 
     query_vector = state.get("query_vector")
@@ -483,6 +499,13 @@ def small_talk(state: AgentState):
 def context_organizer(state: AgentState):
     search_results = state.get("search_results") or []
     label_text = state.get("label_text") or ""
+
+    writer = get_stream_writer()
+
+    writer({
+        "type": "status",
+        "status": "상품 요약중 ..."
+    })
 
     # label_text가 리스트로 들어오는 경우 문자열로 정규화
     if isinstance(label_text, list):
