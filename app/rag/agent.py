@@ -111,15 +111,6 @@ def start_agent(
     # 4. 정상적인 텍스트인 경우
     else:
         safe_message = query_text
-    try:
-        # 그래프 이미지 저장 로직
-        png_bytes = graph.get_graph().draw_mermaid_png()
-        with open(
-            "/home/liam/shopping_ai/shopping_assistant/app/rag/graph.png", "wb"
-        ) as f:
-            f.write(png_bytes)
-    except Exception:
-        pass
 
     # 유효한 입력일 때만 Graph(LLM) 호출
     final_state = graph.invoke(

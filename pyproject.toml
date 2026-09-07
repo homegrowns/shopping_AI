@@ -25,7 +25,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "pillow==10.4.0",
     "sentence-transformers==3.0.1",
-    "qdrant-client==1.10.1",
+    "qdrant-client==1.18.0",
     "numpy==1.26.4",
     "python-multipart==0.0.9",
     "google-cloud-vision==3.7.4",

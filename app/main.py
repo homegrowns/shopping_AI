@@ -12,7 +12,7 @@ import aioboto3
 import numpy as np
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 
 from app.image_embedding_similarity.crop_utils import (
@@ -26,7 +26,7 @@ from app.image_embedding_similarity.qdrant_utils import (
     get_client,
     search_similar,
 )
-from app.rag.agent import start_agent
+from app.rag.agent_stream import start_agent
 from app.result_item_class import SearchResponse, SearchResultItem
 from app.service.search_service import build_query_vector
 
@@ -79,13 +79,8 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/search", response_model=SearchResponse)
-async def search(
-    request: Request,
-    session_id: str = Form(...),
-    message: str | None = Form(None),
-    s3_key: str | None = Form(None),
-):
+async def _prepare_search(request, message, s3_key):
+    """검색 전처리 로직 (이미지 바이트 확보, 라벨 감지, 쿼리 벡터 생성)"""
     contents = None
     message = message.strip() if message else None
 
@@ -98,11 +93,9 @@ async def search(
             contents = await obj["Body"].read()
 
     if not contents and not message:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "이미지 또는 텍스트 중 하나는 입력해야 합니다."},
-        )
-    elif not message:
+        return None  # 에러 케이스
+
+    if not message:
         print("메세지가 없습니다.")
 
     image_labels: list[str] = []
@@ -122,28 +115,80 @@ async def search(
         contents, message, embedder
     )
 
-    # RAG 파이프시작
     if message is not None:
-        final_state = start_agent(
+        agent_kwargs = dict(
             query_text=message,
             label_text=", ".join(image_labels[:5]),
             query_vector=query_vector,
             is_image_collection=is_image_collection,
         )
     else:
-        final_state = start_agent(
+        agent_kwargs = dict(
             label_text="[이미지 속 카테고리]=" + ", ".join(image_labels[:5]),
             query_vector=query_vector,
             is_image_collection=is_image_collection,
         )
 
-    structured_results = final_state.get("search_results")
-    answer_text = final_state.get("answer", "")
+    return agent_kwargs
 
-    print(f"\n final_state: {structured_results}")
-    print(f"\n answer_text: {answer_text}")
+
+# ── 기존 프론트엔드 호환: JSON 응답 ──
+@app.post("/search", response_model=SearchResponse)
+async def search(
+    request: Request,
+    session_id: str = Form(...),
+    message: str | None = Form(None),
+    s3_key: str | None = Form(None),
+):
+    agent_kwargs = await _prepare_search(request, message, s3_key)
+    if agent_kwargs is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "이미지 또는 텍스트 중 하나는 입력해야 합니다."},
+        )
+
+    # generator를 소비해서 최종 결과만 수집 (LLM 1회만 호출)
+    search_results = []
+    answer = ""
+    for event in start_agent(**agent_kwargs):
+        if event["type"] == "done":
+            search_results = event["search_results"]
+            answer = event["answer"]
+
+    print(f"\n search_results: {search_results}")
+    print(f"\n answer: {answer}")
 
     return SearchResponse(
-        results=structured_results,
-        answer=answer_text,
+        results=search_results,
+        answer=answer,
     )
+
+
+# ── SSE 스트리밍: 토큰 단위 실시간 전송 ──
+@app.post("/search/stream")
+async def search_stream(
+    request: Request,
+    session_id: str = Form(...),
+    message: str | None = Form(None),
+    s3_key: str | None = Form(None),
+):
+    agent_kwargs = await _prepare_search(request, message, s3_key)
+    if agent_kwargs is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "이미지 또는 텍스트 중 하나는 입력해야 합니다."},
+        )
+
+    async def event_generator():
+        async for event in start_agent(**agent_kwargs):
+            if event["type"] == "status":
+                # 프론트엔드가 data.status로 읽음 → onStatus 콜백 호출
+                yield f"data: {json.dumps({'status': event['status']}, ensure_ascii=False)}\n\n"
+            elif event["type"] == "token":
+                # 프론트엔드가 data.token으로 읽음 → onToken 콜백 호출
+                yield f"data: {json.dumps({'token': event['content']}, ensure_ascii=False)}\n\n"
+            elif event["type"] == "done":
+                # 프론트엔드가 data.done / data.results로 읽음 → onResults 콜백 호출
+                yield f"data: {json.dumps({'done': True, 'results': event['search_results'], 'answer': event['answer']}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
