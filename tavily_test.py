@@ -33,7 +33,7 @@ def search_latest_price(product: dict):
     cate = product["cate"]
     # URL 자체를 검색어로 강제하는 것은 별 도움 안 될 가능성이 큼
     # query = f' "{sale}" 쇼핑몰에서 판매하는 "{cate}" 카테고리 "{title}"의 판매가 찾아'
-    query = '"쿠팡에서 먼저검색" "몬스 텐셀 와이드 데님" "" "남성의류" 가격'
+    query = '"장원영" "의류" "종류" 가격'
     print("검색 Query:", query)
 
     result = client.search(
@@ -332,6 +332,7 @@ if __name__ == "__main__":
 
         print("\n" + "=" * 80)
         print(f"[{idx}] {title}")
+        print("내용:", text)
         print("URL:", url)
 
         # -------------------------------------------------

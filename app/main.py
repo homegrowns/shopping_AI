@@ -22,7 +22,6 @@ from app.image_embedding_similarity.crop_utils import (
 from app.image_embedding_similarity.embedder import ClipEmbedder
 from app.image_embedding_similarity.label_utils import get_image_labels
 from app.image_embedding_similarity.qdrant_utils import (
-    ensure_collection,
     get_client,
     search_similar,
 )
@@ -41,7 +40,6 @@ S3_BUCKET = os.getenv("S3_BUCKET")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.qdrant_client = get_client()
-    ensure_collection(app.state.qdrant_client)
     app.state.embedder = ClipEmbedder.get_instance()
 
     yield

@@ -9,9 +9,8 @@ load_dotenv()
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
-from langgraph.graph import END
 from langgraph.config import get_stream_writer
+from langgraph.graph import END
 
 from app.rag.communication_tool import handle_small_talk
 from app.rag.qdrant_tool import (
@@ -241,10 +240,7 @@ def chatbot(state: AgentState):
     writer = get_stream_writer()
 
     # 실제 LLM 처리를 시작하기 전에 바로 프론트로 보냄
-    writer({
-        "type": "status",
-        "status": "🦾 질문 분석 중..."
-    })
+    writer({"type": "status", "status": "🦾 질문 분석 중..."})
 
     label_text = (state.get("label_text") or "").strip()
     has_image = (
@@ -354,10 +350,7 @@ def qdrant_search(state: AgentState):
     """
     writer = get_stream_writer()
 
-    writer({
-        "type": "status",
-        "status": "👀 상품 검색 중..."
-    })
+    writer({"type": "status", "status": "👀 상품 검색 중..."})
 
     print("----- [QDRANT + SQLLITE SEARCH] -----")
 
@@ -502,10 +495,7 @@ def context_organizer(state: AgentState):
 
     writer = get_stream_writer()
 
-    writer({
-        "type": "status",
-        "status": "🔥상품 요약중🔥..."
-    })
+    writer({"type": "status", "status": "🔥상품 요약중🔥..."})
 
     # label_text가 리스트로 들어오는 경우 문자열로 정규화
     if isinstance(label_text, list):

@@ -101,7 +101,9 @@ async def start_agent(
     # 3. [핵심] 의미 없는 입력인 경우 -> LLM(그래프)을 아예 호출하지 않고 즉시 종료!
     elif is_meaningless:
         print(f"-----MEANINGLESS INPUT DETECTED: {query_text} -----")
-        fallback_answer = "무엇을 도와드릴까요? 원하시는 상품명이나 특징을 구체적으로 입력해주세요. "
+        fallback_answer = (
+            "무엇을 도와드릴까요? 원하시는 상품명이나 특징을 구체적으로 입력해주세요. "
+        )
         yield {"type": "token", "content": fallback_answer}
         yield {"type": "done", "search_results": [], "answer": fallback_answer}
         return
@@ -110,15 +112,15 @@ async def start_agent(
     else:
         safe_message = query_text
 
-    try:
-        # 그래프 이미지 저장 로직
-        png_bytes = graph.get_graph().draw_mermaid_png()
-        with open(
-            "/home/liam/shopping_ai/shopping_assistant/app/rag/graph.png", "wb"
-        ) as f:
-            f.write(png_bytes)
-    except Exception:
-        pass
+    # try:
+    #     # 그래프 이미지 저장 로직
+    #     png_bytes = graph.get_graph().draw_mermaid_png()
+    #     with open(
+    #         "/home/liam/shopping_ai/shopping_assistant/app/rag/graph.png", "wb"
+    #     ) as f:
+    #         f.write(png_bytes)
+    # except Exception:
+    #     pass
 
     # ── 핵심: stream_mode를 리스트로 지정하면 토큰 + state 업데이트를 동시에 받음 ──
     search_results = []
@@ -141,10 +143,9 @@ async def start_agent(
             print(f"상태 메세지 : {data}")
             yield data
 
-        elif kind == "updates":
+        if kind == "updates":
             # data = {node_name: node_output_dict}
             for node_name, node_output in data.items():
-
                 if not isinstance(node_output, dict):
                     continue
                 # 검색 결과 저장
@@ -153,28 +154,34 @@ async def start_agent(
 
                 # generate 노드가 완료되면
                 # node_output 자체가 generate 노드의 반환값이다.
-                if node_name == "generate":
+            if node_name == "generate":
+                answer = node_output.get("answer")
 
-                    answer = node_output.get("answer")
-                    answer_chunks.append(answer)
-                    if answer:
-                        yield {
-                            "type": "token",
-                            "content": answer,
-                        }
+                if answer:
+                    # generate는 완성된 답변이므로 기존 값 덮어쓰기
+                    answer_chunks = [answer]
+
+                    yield {
+                        "type": "token",
+                        "content": answer,
+                    }
+
         elif kind == "messages":
             msg, metadata = data
             node_name = metadata.get("langgraph_node", "")
-    
-            # small_talk 노드의 응답도 스트리밍
+
+            # small_talk은 실제 streaming chunk
             if node_name == "small_talk" and msg.content:
                 answer_chunks.append(msg.content)
-                yield {"type": "token", "content": msg.content}
 
-    # 모든 스트리밍이 끝난 뒤 최종 결과를 한 번에 전송
+                yield {
+                    "type": "token",
+                    "content": msg.content,
+                }
+
+    # 최종 답변은 리스트가 아니라 문자열로
     yield {
         "type": "done",
         "search_results": search_results,
-        "answer": "".join(answer_chunks),
+        "answer": answer_chunks,
     }
-

@@ -11,18 +11,15 @@ from importlib.metadata import version
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langgraph.config import get_stream_writer
 from langgraph.graph import END
 from qdrant_client import models
 
-from app.rag.communication_tool import handle_small_talk
-from app.rag.qdrant_tool import (
-    LangChainClipEmbedder,
-    client,
-    products_images_search_tool,
-    retriever,
+from app.image_embedding_similarity.qdrant_utils import (
+    get_client,
 )
+from app.rag.communication_tool import handle_small_talk
+from app.rag.qdrant_tool import products_search
 from app.rag.response_guard import suppress_redundant_image_request
 from app.rag.sql_tool import qdrant_to_sql
 from app.rag.state import AgentState
@@ -52,12 +49,10 @@ elif os.getenv("ENV") == "dev":
     llm = ChatOllama(model="llama3.1")
     print("(nodes.py)LLM: ", "dev llama3.1")
 
-COLLECTION_NAME_IMG = os.getenv("QDRANT_COLLECTION_IMG", "products_images")
-COLLECTION_NAME_DESC = os.getenv("QDRANT_COLLECTION_DESC", "products_hybrid ")
 TOP_K = int(os.getenv("TOP_K"))
 SCORE = float(os.getenv("SCORE", 0.4))
 
-llm_with_tools = llm.bind_tools([products_images_search_tool, handle_small_talk])
+llm_with_tools = llm.bind_tools([products_search, handle_small_talk])
 
 
 system_prompt = """
@@ -106,19 +101,22 @@ system_prompt = """
 - 이 이미지와 유사한 상품을 찾아주세요. 라는 인풋메세지가 있으면 "올리신 사진"과 "유사한 상품"이라고 언급하세요
 - description 및 제품 설명을 잘보고 추천이유를 고객에게 잘 설명합니다.
 - 검색 결과가 요청 상품과 종류가 다르면 굳이 결과를 안보여줘도 됩니다.
-- 검색 결과에 없는 정보는 추측하지 않습니다. (예시: 회색 상품이 있습니다.)
 - 이전 질문과 연관지어서 답변하지마세요.
 - 상품의 총 개수 같은 질문은 모른다고 하세요
 - 상품이나 상품추천 질문아니면 답변하지말고 상품관련 질문만 해달라고 하세요
 - IT 기술 질문 무시 예) 파이썬, 랭체인 등등
-- 유사도 0.8 이상의 같은 종류상품이 아니면 같은상품 아니라고 말하고 최대한 비슷한 상품을 추천했다고 말합니다.
 """
 
 
 def _hybrid_search(query_vector, user_message):
     """Dense + BM25 Hybrid Search"""
+    client = get_client()
+
+    collection_name = "products_hybrid"
+
+    print(f"[DEBUG] collection_name={collection_name}")
     return client.query_points(
-        collection_name=COLLECTION_NAME_DESC,
+        collection_name=collection_name,
         prefetch=[
             # Dense
             models.Prefetch(
@@ -145,8 +143,11 @@ def _hybrid_search(query_vector, user_message):
 
 def _search_image(query_vector):
     """Image Vector Search"""
+    client = get_client()
+    collection_name = "products_images"
+    print(f"[DEBUG] collection_name={collection_name}")
     return client.query_points(
-        collection_name=COLLECTION_NAME_IMG,
+        collection_name=collection_name,
         query=query_vector,
         limit=TOP_K,
         with_payload=True,
@@ -377,7 +378,7 @@ def route_tools(state: AgentState):
     # 어떤 도구인지 확인
     tool_name = last_message.tool_calls[0]["name"]
 
-    if tool_name == "products_images_search":
+    if tool_name == "products_search":
         print("----- [ROUTE TOOLS QDRANT SEARCH] -----")
         return "tools"  # →  QDRANT SEARCH
     elif tool_name == "handle_small_talk":
@@ -413,13 +414,15 @@ def qdrant_search(state: AgentState):
     context = "검색된 상품 목록은 다음과 같습니다:\n"
     seen_ids = set()
     try:
-        if query_vector and user_message:
+        if user_message:
+            print("[HYBRID SEARCH]")
             results = _hybrid_search(
                 query_vector,
                 user_message,
             )
 
         elif query_vector:
+            print("[IMAGE VECTOR SEARCH]")
             results = _search_image(query_vector)
     except Exception as e:
         print(f"[QDRANT SEARCH ERROR] {e}")
@@ -432,7 +435,6 @@ def qdrant_search(state: AgentState):
         description = payload.get("description")
         image_url = payload.get("image_url")
         score = point.score
-        print(f"hybrid search rs= {description}, {score}")
 
         if score >= 0.9:
             structured_results.append(
@@ -474,7 +476,7 @@ def qdrant_search(state: AgentState):
         db_results = qdrant_to_sql(structured_results)
         if db_results:
             structured_results = db_results
-            # print(f"- DB조회 결과: {structured_results}")
+            print(f"- DB조회 결과: {structured_results}")
             context += f"- DB조회 결과: {structured_results}\n"
         else:
             print("DB조회 실패")

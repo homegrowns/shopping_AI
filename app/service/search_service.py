@@ -20,8 +20,8 @@ translate_client = translate.Client()
 # (크롭만 쓰면 장식 디테일에 과도하게 집중되는 문제가 있어 원본 맥락을 일부 반영)
 CROP_WEIGHT = 0.3
 ORIGINAL_WEIGHT = 0.4
-IMAGE_WEIGHT = 0.4
-TEXT_WEIGHT = 0.6
+IMAGE_WEIGHT = 0.2
+TEXT_WEIGHT = 0.8
 
 # 검사하고 싶은 단어들을 리스트로 모아둡니다.
 KEYWORD = (
@@ -190,9 +190,7 @@ def build_query_vector(
     elif message is not None and not message.isascii():
         try:
             result = translate_client.translate(
-                message, 
-                source_language="ko", 
-                target_language="en"
+                message, source_language="ko", target_language="en"
             )
             msg = result["translatedText"].lower()
             text_vector = get_text_vector(msg, embedder)

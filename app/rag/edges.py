@@ -1,29 +1,32 @@
-from pydantic import BaseModel, Field
-from dotenv import load_dotenv
 import os
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 if os.getenv("ENV") == "prod":
     from langchain_aws import ChatBedrockConverse  # Converse API 기반 클래스 사용
+
     print("(nodes.py) LLM: ", "prod anthropic.claude-3-5-sonnet-20240620-v1:0")
 
     llm = ChatBedrockConverse(
-        model_id="anthropic.claude-3-5-sonnet-20240620-v1:0",  
+        model_id="anthropic.claude-3-5-sonnet-20240620-v1:0",
         region_name="ap-northeast-2",  # 서울 리전 명시
-        temperature=0.5
+        temperature=0.5,
     )
 
 elif os.getenv("ENV") == "stg":
     from langchain_google_genai import ChatGoogleGenerativeAI
+
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
     print("(edges.py) LLM: ", "stg", "gemini-2.5-flash")
 
 elif os.getenv("ENV") == "dev":
     from langchain_ollama import ChatOllama
+
     llm = ChatOllama(model="llama3.1")
     print("(edges.py)LLM: ", "dev")
 
@@ -31,7 +34,9 @@ elif os.getenv("ENV") == "dev":
 class Grade(BaseModel):
     """관련성 확인을 위한 점수 스키마"""
 
-    binary_score: str = Field(description="문서가 질문과 관련이 있는지 여부, 'yes' 또는 'no'")
+    binary_score: str = Field(
+        description="문서가 질문과 관련이 있는지 여부, 'yes' 또는 'no'"
+    )
 
 
 def decide_to_generate(state):
@@ -40,12 +45,12 @@ def decide_to_generate(state):
     """
 
     print("----- DECIDE NEXT STEP -----")
-    if state.get("retry_num", 0) >= 3: # [ 1 ]
+    if state.get("retry_num", 0) >= 3:  # [ 1 ]
         return "generate"
 
-    grader = llm.with_structured_output(Grade) # [ 2 ]
+    grader = llm.with_structured_output(Grade)  # [ 2 ]
 
-    grader_prompt = ChatPromptTemplate.from_messages( # [ 3 ]
+    grader_prompt = ChatPromptTemplate.from_messages(  # [ 3 ]
         [
             (
                 "system",
@@ -54,11 +59,11 @@ def decide_to_generate(state):
                 문서가 사용자 질문과 관련된 키워드나 의미를 포함하고 있다면 관련성이 있다고 평가하세요.
                 목표는 잘못된 검색 결과를 필터링하는 것입니다.
                 문서가 질문과 관련이 있는지를 나타내는 'yes' 또는 'no'의 이진 점수를 제공하세요.
-                """
+                """,
             ),
             (
                 "user",
-                "검색된 문서: {context} \n\n 사용자 질문: {question} \n\n 관련성 점수:"
+                "검색된 문서: {context} \n\n 사용자 질문: {question} \n\n 관련성 점수:",
             ),
         ]
     )
@@ -73,7 +78,7 @@ def decide_to_generate(state):
         return "generate"
 
     score = chain.invoke({"question": question, "context": context})
-    grade = score.binary_score # [ 4 ]
+    grade = score.binary_score  # [ 4 ]
 
     if grade == "no":
         print(
@@ -85,13 +90,13 @@ def decide_to_generate(state):
         return "generate"
 
 
-
 class GradeHallucinations(BaseModel):
     """생성된 답변의 환각 여부를 판단하기 위한 점수 스키마"""
 
     binary_score: str = Field(
         description="답변이 사실에 근거하고 있는지 여부, 'yes' 또는 'no'"
     )
+
 
 def check_hallucinations(state):
     """
@@ -112,7 +117,10 @@ def check_hallucinations(state):
     hallucination_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system),
-            ("user", "질문: {question} \n\n 사실 집합: \n\n {context} \n\n LLM 생성 답변: {generation}"),
+            (
+                "user",
+                "질문: {question} \n\n 사실 집합: \n\n {context} \n\n LLM 생성 답변: {generation}",
+            ),
         ]
     )
 
@@ -130,7 +138,9 @@ def check_hallucinations(state):
         return "support"  # END 노드로 직행
 
     if grade == "yes":
-        print("---DECISION: 문서 내용에 기반하여 안전하게 답변 생성됨 (환각 없음, 통과!)---")
+        print(
+            "---DECISION: 문서 내용에 기반하여 안전하게 답변 생성됨 (환각 없음, 통과!)---"
+        )
         print(f"context: {context}")
         print("==============================")
         print(f"generation: {answer}")
