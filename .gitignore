@@ -11,6 +11,8 @@ wheels/
 config.js
 *.bak
 *.ollama
+crawler_to_pipeline_pj/
+templates/
 
 #sqllite
 products.db

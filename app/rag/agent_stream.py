@@ -33,7 +33,7 @@ graph_builder.add_conditional_edges(
     "chatbot",
     route_tools,
     {
-        "tools": "qdrant_search",
+        "qdrant_search": "qdrant_search",
         "small_talk": "small_talk",
         END: END,
     },
@@ -183,5 +183,5 @@ async def start_agent(
     yield {
         "type": "done",
         "search_results": search_results,
-        "answer": answer_chunks,
+        "answer": "".join(answer_chunks),
     }

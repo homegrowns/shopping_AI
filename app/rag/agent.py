@@ -33,7 +33,7 @@ graph_builder.add_conditional_edges(
     "chatbot",
     route_tools,
     {
-        "tools": "qdrant_search",
+        "qdrant_search": "qdrant_search",
         "small_talk": "small_talk",
         END: END,
     },

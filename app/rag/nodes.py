@@ -9,20 +9,19 @@ load_dotenv()
 
 from importlib.metadata import version
 
+from app.image_embedding_similarity.qdrant_utils import (
+    get_client,
+)
+from app.rag.communication_tool import handle_small_talk
+from app.rag.qdrant_tool import qdrant_search
+from app.rag.response_guard import suppress_redundant_image_request
+from app.rag.sql_tool import qdrant_to_sql
+from app.rag.state import AgentState
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.config import get_stream_writer
 from langgraph.graph import END
 from qdrant_client import models
-
-from app.image_embedding_similarity.qdrant_utils import (
-    get_client,
-)
-from app.rag.communication_tool import handle_small_talk
-from app.rag.qdrant_tool import products_search
-from app.rag.response_guard import suppress_redundant_image_request
-from app.rag.sql_tool import qdrant_to_sql
-from app.rag.state import AgentState
 
 print("QDRANT CLIENT VERSION =", version("qdrant-client"))
 
@@ -51,15 +50,16 @@ elif os.getenv("ENV") == "dev":
 
 TOP_K = int(os.getenv("TOP_K"))
 SCORE = float(os.getenv("SCORE", 0.4))
+CANDIDATE_K = int(os.getenv("CANDIDATE_K"))
 
-llm_with_tools = llm.bind_tools([products_search, handle_small_talk])
+llm_with_tools = llm.bind_tools([qdrant_search, handle_small_talk])
 
 
 system_prompt = """
 당신은 쇼핑몰 AI 어시스턴트입니다.
 
 ## 이름
-- 조디
+- linda
 
 ## 역할
 - 상품 추천 및 상품 관련 질문에 답변합니다.
@@ -68,15 +68,12 @@ system_prompt = """
 
 ## 도구 사용 규칙
 
-### products_images_search
+### products_search
 다음 경우 반드시 호출하세요.
 - is_image_collection = true 일때
-- 상품 추천
-- 상품 이름 (예시: 야구모자)
+- 상품을 찾는 요청(추천해줘, 찾아줘)
 - 비슷한 상품 찾기
-- 코디 추천
 - 이미지 기반 상품 추천 (메세지: 이미지와 유사한 상품을 찾아)
-- 특정 상품을 찾는 요청
 - 관련 상품 카테고리 질문 안내
 
 검색 결과를 사용할 때는 다음을 지키세요.
@@ -99,7 +96,7 @@ system_prompt = """
 ## 답변 규칙
 - 답변은 간결하고 질문에 맞게 작성합니다.
 - 이 이미지와 유사한 상품을 찾아주세요. 라는 인풋메세지가 있으면 "올리신 사진"과 "유사한 상품"이라고 언급하세요
-- description 및 제품 설명을 잘보고 추천이유를 고객에게 잘 설명합니다.
+- search_text 및 제품 설명을 잘보고 추천이유를 고객에게 잘 설명합니다.
 - 검색 결과가 요청 상품과 종류가 다르면 굳이 결과를 안보여줘도 됩니다.
 - 이전 질문과 연관지어서 답변하지마세요.
 - 상품의 총 개수 같은 질문은 모른다고 하세요
@@ -122,7 +119,7 @@ def _hybrid_search(query_vector, user_message):
             models.Prefetch(
                 query=query_vector,
                 using="product_fusion",
-                limit=TOP_K,
+                limit=CANDIDATE_K,
             ),
             # Sparse / BM25
             models.Prefetch(
@@ -131,7 +128,7 @@ def _hybrid_search(query_vector, user_message):
                     model="qdrant/bm25",
                 ),
                 using="description_bm25",
-                limit=TOP_K,
+                limit=CANDIDATE_K,
             ),
         ],
         query=models.FusionQuery(fusion=models.Fusion.RRF),
@@ -322,8 +319,8 @@ def chatbot(state: AgentState):
     messages.extend(state["messages"])
 
     print("----- [LLM INPUT] -----")
-    for message in messages:
-        print(type(message).__name__, repr(message.content))
+    # for message in messages:
+    #     print(type(message).__name__, repr(message.content))
 
     response = llm_with_tools.invoke(messages)
     answer_text = suppress_redundant_image_request(
@@ -368,7 +365,7 @@ def route_tools(state: AgentState):
     # 이미지가 첨부된 요청은 상품 검색 우선
     if has_image:
         print("----- [ROUTE IMAGE TO QDRANT SEARCH] -----")
-        return "tools"
+        return "qdrant_search"
 
     # 이미지 요청이 아니고 도구 호출도 없으면 종료
     if not tool_calls:
@@ -378,9 +375,9 @@ def route_tools(state: AgentState):
     # 어떤 도구인지 확인
     tool_name = last_message.tool_calls[0]["name"]
 
-    if tool_name == "products_search":
+    if tool_name == "qdrant_search":
         print("----- [ROUTE TOOLS QDRANT SEARCH] -----")
-        return "tools"  # →  QDRANT SEARCH
+        return "qdrant_search"  # →  QDRANT SEARCH
     elif tool_name == "handle_small_talk":
         print("----- [ROUTE small_talk] -----")
         # 핵심 수정: 그래프 이미지에 있는 노드 이름과 똑같이 맞춰줍니다!
@@ -398,11 +395,7 @@ def qdrant_search(state: AgentState):
 
     writer({"type": "status", "status": "👀 상품 검색 중..."})
 
-    print("----- [QDRANT + SQLLITE SEARCH] -----")
-
     query_vector = state.get("query_vector")
-    is_image_collection = state.get("is_image_collection")
-    print("is_image_collection", is_image_collection)
     user_message = state.get("original_question") or state.get("question") or ""
 
     # -------------------------
@@ -414,16 +407,12 @@ def qdrant_search(state: AgentState):
     context = "검색된 상품 목록은 다음과 같습니다:\n"
     seen_ids = set()
     try:
-        if user_message:
-            print("[HYBRID SEARCH]")
-            results = _hybrid_search(
-                query_vector,
-                user_message,
-            )
+        print("[HYBRID SEARCH]")
+        results = _hybrid_search(
+            query_vector,
+            user_message,
+        )
 
-        elif query_vector:
-            print("[IMAGE VECTOR SEARCH]")
-            results = _search_image(query_vector)
     except Exception as e:
         print(f"[QDRANT SEARCH ERROR] {e}")
         context = "상품 검색 중 오류가 발생했습니다."
@@ -431,29 +420,31 @@ def qdrant_search(state: AgentState):
     for idx, point in enumerate(results, 1):
         payload = point.payload or {}
 
-        product_id = payload.get("product_id")
-        description = payload.get("description")
+        product_id = payload.get("id")
+        search_text = payload.get("search_text")
         image_url = payload.get("image_url")
-        score = point.score
+        rrf_score = point.score
 
-        if score >= 0.9:
+        if rrf_score >= 0.9:
+            # 테스트 결과, 특정 상품명을 직접 검색한 경우
+            # 높은 RRF score가 나타나므로 해당 상품을 우선 반환
             structured_results.append(
                 {
-                    "score": round(score, 4),
+                    "score": round(rrf_score, 4),
                     "product_id": product_id,
-                    "description": description,
+                    "search_text": search_text,
                     "image_url": image_url,
                 }
             )
 
-            context += f"[{product_id}번 상품] (유사도: {round(score, 4)})\n"
-            context += f"- 상품 설명: {description}\n"
+            context += f"[{product_id}번 상품] (유사도: {round(rrf_score, 4)})\n"
+            context += f"- 상품 설명: {search_text}\n"
             break
         else:
-            if score < SCORE:
+            if rrf_score < SCORE:
                 continue
-            # 중복 검사 로직 시작
-            # 이미지가 아예 없거나, 이미 추가한 URL이면 무시하고 다음으로 넘어감
+
+            # product_id가 없거나 이미 추가한 상품이면 제외
             if not product_id or product_id in seen_ids:
                 continue
 
@@ -462,18 +453,23 @@ def qdrant_search(state: AgentState):
 
             structured_results.append(
                 {
-                    "score": round(score, 4),
+                    "score": round(rrf_score, 4),
                     "product_id": product_id,
-                    "description": description,
+                    "search_text": search_text,
                     "image_url": image_url,
                 }
             )
 
-            context += f"[{product_id}번 상품] (유사도: {round(score, 4)})\n"
-            context += f"- 상품 설명: {description}\n"
+            context += (
+                f"[{product_id}번 상품] "
+                f"(RRF score: {round(rrf_score, 4)})\n"
+                f"- 상품 설명: {search_text}\n"
+            )
 
     if structured_results:
+        # print(f"qdrant 결과= {structured_results}")
         db_results = qdrant_to_sql(structured_results)
+
         if db_results:
             structured_results = db_results
             print(f"- DB조회 결과: {structured_results}")
@@ -484,11 +480,11 @@ def qdrant_search(state: AgentState):
     # Tool 호출에 대한 응답 메시지(검색 결과) 생성
     last_message = state["messages"][-1]
 
-    # 리턴할 때 search_results 필드에 우리가 만든 JSON 리스트를 같이 담아서 넘김
+    # 리턴할 때 search_results 필드에 JSON 리스트를 같이 담아서 넘김
     if hasattr(last_message, "tool_calls") and len(last_message.tool_calls) > 0:
         tool_call_id = last_message.tool_calls[0]["id"]
         tool_message = ToolMessage(
-            content=context, name="products_images_search", tool_call_id=tool_call_id
+            content=context, name="qdrant_search", tool_call_id=tool_call_id
         )
         return {
             "messages": [tool_message],

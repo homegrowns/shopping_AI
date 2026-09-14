@@ -2,7 +2,7 @@ from langchain_core.tools import tool
 
 
 @tool
-def products_search(query: str) -> str:
+def qdrant_search(query: str) -> str:
     """
     사용자의 요청에 맞는 상품을 검색합니다.
 
@@ -13,12 +13,13 @@ def products_search(query: str) -> str:
       예: "20만원 이하 여성 패딩 추천해줘"
     - 비슷한 상품을 찾는 경우
       예: "이 청바지와 비슷한 상품 찾아줘"
-    - 브랜드명, 정확한 상품명 또는 모델명/품번으로 특정 상품을 찾는 경우
-      예: "코오롱스포츠 여성 롱다운 안타티카 JKJDW24242 찾아줘"
+    - 브랜드명, 정확한 상품명 또는 모델명으로 특정 상품을 찾는 경우
+      예: "코오롱스포츠 여성 롱다운 안타티카 찾아줘"
       예: "JKJDW24242 상품 검색해줘"
 
     사용자가 브랜드명, 상품명, 모델명, 품번 등을 명시한 경우
     해당 정보를 검색어에서 생략하거나 일반화하지 말고 그대로 유지하세요.
     """
+
     # 실제 검색은 LangGraph qdrant_search node에서 수행
     return query

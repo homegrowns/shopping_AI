@@ -139,10 +139,9 @@ def check_hallucinations(state):
 
     if grade == "yes":
         print(
-            "---DECISION: 문서 내용에 기반하여 안전하게 답변 생성됨 (환각 없음, 통과!)---"
+            "---DECISION: 문서 내용에 기반하여 안전하게 답변 생성됨 (환각 없음, 통과!)---\n"
         )
-        print(f"context: {context}")
-        print("==============================")
+        print("==============================\n\n")
         print(f"generation: {answer}")
         return "support"
     else:

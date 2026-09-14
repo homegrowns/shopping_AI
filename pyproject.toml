@@ -37,6 +37,8 @@ dependencies = [
     "deep-translator>=1.11.4",
     "firecrawl>=4.40.0",
     "google-cloud-translate>=3.27.0",
+    "crawl4ai>=0.7.6",
+    "beautifulsoup4>=4.15.0",
 ]
 
 [[tool.uv.index]]

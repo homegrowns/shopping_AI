@@ -24,6 +24,7 @@ wheels/
 # Data files
 chroma_db/
 dataset/
+*.legacy
 
 tavily_test.py
 *.bak
